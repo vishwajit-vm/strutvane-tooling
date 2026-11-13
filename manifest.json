@@ -38,6 +38,10 @@
       "profile": "library"
     },
     {
+      "name": "files",
+      "profile": "library"
+    },
+    {
       "name": "docs",
       "profile": "site"
     },
@@ -120,6 +124,11 @@
       "path": ".github/scripts/check-deps.mjs",
       "when": "hasPackageJson",
       "profiles": ["library"]
+    },
+    {
+      "path": ".github/workflows/scorecard.yml",
+      "when": "hasPackageJson",
+      "profiles": ["library", "meta"]
     }
   ]
 }
