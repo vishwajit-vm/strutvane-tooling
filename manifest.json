@@ -1,30 +1,110 @@
 {
   "$comment": "Which canonical files are synced into which repos. A target's profile decides which files it gets: 'library' = TypeScript package repo, 'site' = docs site, 'meta' = hub and tooling. 'when: hasPackageJson' files only go to repos that already contain a package.json. Files without 'profiles' go to every profile.",
   "targets": [
-    { "name": "contracts", "profile": "library" },
-    { "name": "core", "profile": "library" },
-    { "name": "framework", "profile": "library" },
-    { "name": "auth", "profile": "library" },
-    { "name": "ui", "profile": "library" },
-    { "name": "cli", "profile": "library" },
-    { "name": "devkit", "profile": "library" },
-    { "name": "create-strutvane", "profile": "library" },
-    { "name": "docs", "profile": "site" },
-    { "name": "tooling", "profile": "meta" },
-    { "name": "hub", "dir": "..", "profile": "meta" }
+    {
+      "name": "contracts",
+      "profile": "library"
+    },
+    {
+      "name": "core",
+      "profile": "library"
+    },
+    {
+      "name": "framework",
+      "profile": "library"
+    },
+    {
+      "name": "auth",
+      "profile": "library"
+    },
+    {
+      "name": "ui",
+      "profile": "library"
+    },
+    {
+      "name": "cli",
+      "profile": "library"
+    },
+    {
+      "name": "devkit",
+      "profile": "library"
+    },
+    {
+      "name": "create-strutvane",
+      "profile": "library"
+    },
+    {
+      "name": "logs",
+      "profile": "library"
+    },
+    {
+      "name": "docs",
+      "profile": "site"
+    },
+    {
+      "name": "tooling",
+      "profile": "meta"
+    },
+    {
+      "name": "hub",
+      "dir": "..",
+      "profile": "meta"
+    }
   ],
   "files": [
-    { "path": ".editorconfig", "when": "always" },
-    { "path": ".gitattributes", "when": "always" },
-    { "path": ".claude/ECOSYSTEM.md", "when": "always" },
-    { "path": ".claude/agents/strutvane-ecosystem-guardian.md", "when": "always" },
-    { "path": ".claude/skills/strutvane-contribute/SKILL.md", "when": "always" },
-    { "path": ".gitignore", "when": "always", "profiles": ["library"] },
-    { "path": "tsconfig.base.json", "when": "hasPackageJson", "profiles": ["library"] },
-    { "path": "biome.base.json", "when": "hasPackageJson", "profiles": ["library"] },
-    { "path": "vitest.shared.ts", "when": "hasPackageJson", "profiles": ["library"] },
-    { "path": ".github/workflows/ci.yml", "when": "hasPackageJson", "profiles": ["library"] },
-    { "path": ".github/workflows/release.yml", "when": "hasPackageJson", "profiles": ["library"] },
-    { "path": ".github/dependabot.yml", "when": "hasPackageJson" }
+    {
+      "path": ".editorconfig",
+      "when": "always"
+    },
+    {
+      "path": ".gitattributes",
+      "when": "always"
+    },
+    {
+      "path": ".claude/ECOSYSTEM.md",
+      "when": "always"
+    },
+    {
+      "path": ".claude/agents/strutvane-ecosystem-guardian.md",
+      "when": "always"
+    },
+    {
+      "path": ".claude/skills/strutvane-contribute/SKILL.md",
+      "when": "always"
+    },
+    {
+      "path": ".gitignore",
+      "when": "always",
+      "profiles": ["library"]
+    },
+    {
+      "path": "tsconfig.base.json",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": "biome.base.json",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": "vitest.shared.ts",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "when": "hasPackageJson"
+    }
   ]
 }
