@@ -1,14 +1,51 @@
 {
   "$comment": "Which canonical files are synced into which package repos. 'always' files go to every target; 'hasPackageJson' files only to repos that already contain a package.json (i.e. have code).",
-  "targets": ["contracts", "core", "framework", "auth", "ui", "cli", "devkit", "create-strutvane"],
+  "targets": [
+    "contracts",
+    "core",
+    "framework",
+    "auth",
+    "ui",
+    "cli",
+    "devkit",
+    "create-strutvane"
+  ],
   "files": [
-    { "path": ".editorconfig", "when": "always" },
-    { "path": ".gitignore", "when": "always" },
-    { "path": "tsconfig.base.json", "when": "hasPackageJson" },
-    { "path": "biome.base.json", "when": "hasPackageJson" },
-    { "path": "vitest.shared.ts", "when": "hasPackageJson" },
-    { "path": ".github/workflows/ci.yml", "when": "hasPackageJson" },
-    { "path": ".github/workflows/release.yml", "when": "hasPackageJson" },
-    { "path": ".github/dependabot.yml", "when": "hasPackageJson" }
+    {
+      "path": ".editorconfig",
+      "when": "always"
+    },
+    {
+      "path": ".gitattributes",
+      "when": "always"
+    },
+    {
+      "path": ".gitignore",
+      "when": "always"
+    },
+    {
+      "path": "tsconfig.base.json",
+      "when": "hasPackageJson"
+    },
+    {
+      "path": "biome.base.json",
+      "when": "hasPackageJson"
+    },
+    {
+      "path": "vitest.shared.ts",
+      "when": "hasPackageJson"
+    },
+    {
+      "path": ".github/workflows/ci.yml",
+      "when": "hasPackageJson"
+    },
+    {
+      "path": ".github/workflows/release.yml",
+      "when": "hasPackageJson"
+    },
+    {
+      "path": ".github/dependabot.yml",
+      "when": "hasPackageJson"
+    }
   ]
 }
