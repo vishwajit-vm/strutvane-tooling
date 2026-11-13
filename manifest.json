@@ -93,6 +93,11 @@
       "profiles": ["library"]
     },
     {
+      "path": "vitest.perf.config.ts",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
       "path": ".github/workflows/ci.yml",
       "when": "hasPackageJson",
       "profiles": ["library"]
