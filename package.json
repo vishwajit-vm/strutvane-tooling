@@ -1,0 +1,24 @@
+{
+  "name": "@strutvane/tooling",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Canonical configs, CI workflows and the config-sync script shared by every Strutvane package repo.",
+  "license": "MIT",
+  "type": "module",
+  "packageManager": "pnpm@12.18.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "sync": "node scripts/sync.mjs",
+    "sync:check": "node scripts/sync.mjs --check",
+    "sync:dry": "node scripts/sync.mjs --dry-run",
+    "test": "node --test \"scripts/*.test.mjs\"",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "ci": "biome check . && node --test \"scripts/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.7"
+  }
+}
