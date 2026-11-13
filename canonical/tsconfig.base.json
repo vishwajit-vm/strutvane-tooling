@@ -31,6 +31,9 @@
     "isolatedDeclarations": true,
     "verbatimModuleSyntax": true,
     "erasableSyntaxOnly": true, // no enums/namespaces/parameter properties: plain, strippable TS
+    // Import siblings as './x.ts' (what Node's type stripping and bundlers expect). Allowed
+    // because type-checking never emits; tsdown produces the published JavaScript.
+    "allowImportingTsExtensions": true,
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
