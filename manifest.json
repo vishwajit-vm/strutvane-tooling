@@ -105,6 +105,16 @@
     {
       "path": ".github/dependabot.yml",
       "when": "hasPackageJson"
+    },
+    {
+      "path": ".github/scripts/publish-if-new.mjs",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": ".github/scripts/check-deps.mjs",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
     }
   ]
 }
