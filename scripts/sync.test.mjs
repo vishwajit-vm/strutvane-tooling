@@ -44,9 +44,37 @@ describe('normalize', () => {
 })
 
 describe('parseManifest', () => {
-  test('accepts a valid manifest', () => {
+  test('accepts a valid manifest; string targets are library repos, files default to all profiles', () => {
     const m = parseManifest({ targets: ['core'], files: [{ path: 'a.json', when: 'always' }] })
-    assert.deepEqual(m.targets, ['core'])
+    assert.deepEqual(m.targets, [{ name: 'core', dir: 'core', profile: 'library' }])
+    assert.deepEqual(m.files[0]?.profiles, ['library', 'site', 'meta'])
+  })
+  test('accepts object targets, including the hub at ".."', () => {
+    const m = parseManifest({
+      targets: [
+        { name: 'docs', profile: 'site' },
+        { name: 'hub', dir: '..', profile: 'meta' },
+      ],
+      files: [{ path: 'a.md', when: 'always', profiles: ['site', 'meta'] }],
+    })
+    assert.deepEqual(m.targets[1], { name: 'hub', dir: '..', profile: 'meta' })
+  })
+  test('rejects bad target dirs, unknown profiles and duplicate targets', () => {
+    const files = [{ path: 'x', when: 'always' }]
+    assert.throws(
+      () => parseManifest({ targets: [{ name: 'x', dir: '../..', profile: 'meta' }], files }),
+      /dir/,
+    )
+    assert.throws(
+      () => parseManifest({ targets: [{ name: 'x', profile: 'website' }], files }),
+      /profile/,
+    )
+    assert.throws(() => parseManifest({ targets: ['core', 'core'], files }), /duplicate/)
+    assert.throws(
+      () =>
+        parseManifest({ targets: ['core'], files: [{ path: 'x', when: 'always', profiles: [] }] }),
+      /profiles/,
+    )
   })
   test('rejects path traversal, absolute paths and bad "when" values', () => {
     assert.throws(
@@ -69,6 +97,38 @@ describe('parseManifest', () => {
     )
     assert.throws(() => parseManifest({ targets: ['core'], files: [] }), /files/)
     assert.throws(() => parseManifest(null), /object/)
+  })
+})
+
+describe('profiles', () => {
+  test('a file is only synced into repos whose profile it lists', () => {
+    const canonicalDir = join(dir, 'canonical')
+    const rootDir = join(dir, 'packages')
+    write(join(canonicalDir, 'tsconfig.base.json'), '{}')
+    write(join(canonicalDir, '.claude/ECOSYSTEM.md'), '# memory')
+    mkdirSync(join(rootDir, 'lib'), { recursive: true })
+    mkdirSync(join(rootDir, 'site'), { recursive: true })
+    const manifest = parseManifest({
+      targets: [
+        { name: 'lib', profile: 'library' },
+        { name: 'site', profile: 'site' },
+        { name: 'hub', dir: '..', profile: 'meta' },
+      ],
+      files: [
+        { path: 'tsconfig.base.json', when: 'always', profiles: ['library'] },
+        { path: '.claude/ECOSYSTEM.md', when: 'always' },
+      ],
+    })
+    const status = Object.fromEntries(
+      planSync({ canonicalDir, rootDir, manifest }).map((a) => [`${a.repo}:${a.path}`, a.status]),
+    )
+    assert.equal(status['lib:tsconfig.base.json'], 'create')
+    assert.equal(status['site:tsconfig.base.json'], 'skipped-profile')
+    assert.equal(status['hub:tsconfig.base.json'], 'skipped-profile')
+    assert.equal(status['lib:.claude/ECOSYSTEM.md'], 'create')
+    assert.equal(status['site:.claude/ECOSYSTEM.md'], 'create')
+    // The hub target resolves to the parent of rootDir (the temp dir itself), which exists.
+    assert.equal(status['hub:.claude/ECOSYSTEM.md'], 'create')
   })
 })
 

@@ -24,17 +24,26 @@ That raises a familiar problem: ten repos tend to end up with ten slightly diffe
 
 ## What's inside
 
-| File (in `canonical/`) | What it does | Synced when |
-|---|---|---|
-| `tsconfig.base.json` | Strictest practical TypeScript settings. Each flag is commented with the bug it prevents. Repos `extends` it. | repo has `package.json` |
-| `biome.base.json` | Formatting and lint rules (Biome). Repos `extends` it from their own `biome.json`. | repo has `package.json` |
-| `vitest.shared.ts` | Test defaults: no silent passes, type-level tests on, coverage thresholds (90/90/85/90). Repos merge it in `vitest.config.ts`. | repo has `package.json` |
-| `.github/workflows/ci.yml` | Quality gate on Linux, Windows and macOS × Node 24 and 26, with actions pinned to commit SHAs. | repo has `package.json` |
-| `.github/workflows/release.yml` | Changesets release PR, then npm **trusted publishing** (OIDC, no tokens) with provenance. | repo has `package.json` |
-| `.github/dependabot.yml` | Weekly grouped updates for actions and npm deps. | repo has `package.json` |
-| `.editorconfig`, `.gitignore` | Consistent whitespace. Ignores env files, Docker files (local-only, [ADR-0006](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0006-docker-local-only.md)) and build output. | always |
+Every target repo has a **profile**, so each repo only gets what makes sense for it:
+- `library`: TypeScript package repos (contracts, core, framework, auth, ui, cli, devkit, create-strutvane)
+- `site`: the docs site
+- `meta`: the hub/blueprint repo and this tooling repo
 
-The list lives in [`manifest.json`](manifest.json).
+| File (in `canonical/`) | What it does | Goes to |
+|---|---|---|
+| `.claude/ECOSYSTEM.md` | **Shared ecosystem memory.** Repo map, decisions, connection rules, standards, workflow and current status. Every repo's `CLAUDE.md` imports it (`@.claude/ECOSYSTEM.md`), so anyone who clones *any single repo* gets the whole picture. | every repo |
+| `.claude/agents/strutvane-ecosystem-guardian.md` | Reviews a diff in any repo against the ecosystem rules: boundaries, connections, error model, security, tests. | every repo |
+| `.claude/skills/strutvane-contribute/SKILL.md` | The standard contribution workflow: understand, change, verify, land on `main`. | every repo |
+| `.editorconfig`, `.gitattributes` | Consistent whitespace. **LF line endings forced**, so Windows checkouts never fail the formatter. | every repo |
+| `.gitignore` | Ignores env files, Docker files (local-only, [ADR-0006](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0006-docker-local-only.md)) and build output. | library |
+| `tsconfig.base.json` | Strictest practical TypeScript settings. Each flag is commented with the bug it prevents. Repos `extends` it. | library, once it has a `package.json` |
+| `biome.base.json` | Formatting and lint rules (Biome). Repos `extends` it from their own `biome.json`. | library, once it has a `package.json` |
+| `vitest.shared.ts` | Test defaults: no silent passes, type-level tests on, coverage thresholds (90/90/85/90). Repos merge it in `vitest.config.ts`. | library, once it has a `package.json` |
+| `.github/workflows/ci.yml` | Quality gate on Linux, Windows and macOS × Node 24 and 26, with actions pinned to commit SHAs. | library, once it has a `package.json` |
+| `.github/workflows/release.yml` | Changesets release PR, then npm **trusted publishing** (OIDC, no tokens) with provenance. Gated behind the repo variable `RELEASE_ENABLED=true`. | library, once it has a `package.json` |
+| `.github/dependabot.yml` | Weekly grouped updates for actions and npm deps. | any repo with a `package.json` |
+
+The list and the profiles live in [`manifest.json`](manifest.json). Changing the shared memory works like any other config: edit `canonical/.claude/ECOSYSTEM.md`, run `pnpm sync`, and commit in each repo.
 
 ## Every package repo follows the same contract
 

@@ -1,10 +1,16 @@
 # CLAUDE.md: Strutvane Tooling
 
+## Ecosystem memory (shared by every Strutvane repo)
+
+The file below is synced from strutvane-tooling and is identical in every repo. It covers how the whole ecosystem fits together: repo map, decisions, connection rules, standards, workflow and current status. Read it before changing anything.
+
+@.claude/ECOSYSTEM.md
+
 ## What this repo is
 
 Canonical configs and CI workflows for every Strutvane package repo, plus `scripts/sync.mjs`, which copies them into `../<repo>`. It is not published to npm (`private: true`). Repos stay standalone: they commit their copies.
 
-Hub/blueprint: `../../docs/` (decisions D1–D20 in `00-executive-summary.md` win over anything here).
+Hub/blueprint: `../../docs/` (decisions D1–D23 in `00-executive-summary.md` win over anything here).
 
 ## Rules
 
@@ -22,7 +28,7 @@ Hub/blueprint: `../../docs/` (decisions D1–D20 in `00-executive-summary.md` wi
 
 ## Map
 
-- `canonical/`: files synced into package repos (see `manifest.json`)
+- `canonical/`: files synced into every repo, filtered by repo profile (`library` / `site` / `meta`, see `manifest.json`), including the shared ecosystem memory `canonical/.claude/ECOSYSTEM.md`, the `strutvane-ecosystem-guardian` agent and the `strutvane-contribute` skill
 - `scripts/sync.mjs` + `sync.test.mjs`: the sync engine and its tests
 - `.claude/skills/sync-configs/`: playbook for changing a shared config
 - `.claude/agents/config-change-reviewer.md`: reviews config/CI changes
