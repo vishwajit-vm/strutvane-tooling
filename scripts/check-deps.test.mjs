@@ -6,7 +6,11 @@ import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
-import { findLocalDeps, findRepoLocalDeps } from '../canonical/.github/scripts/check-deps.mjs'
+import {
+  findLocalDeps,
+  findLockfileProblems,
+  findRepoLocalDeps,
+} from '../canonical/.github/scripts/check-deps.mjs'
 
 const SCRIPT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -30,91 +34,120 @@ function makeRepo(files) {
   return root
 }
 
+const REG = 'https://registry.npmjs.org'
+/** A v3 lockfile with the given `packages` entries next to the root entry. */
+const lock = (packages) => ({
+  name: 'x',
+  lockfileVersion: 3,
+  packages: { '': { name: 'x' }, ...packages },
+})
+
 describe('findLocalDeps', () => {
-  test('accepts registry versions and ranges', () => {
-    const pkg = { dependencies: { '@strutvane/contracts': '0.1.0-next.0', zod: '^4.6.7' } }
+  test('accepts registry versions, ranges and aliases', () => {
+    const pkg = { dependencies: { a: '1.0.0', b: '^2.0.0' }, devDependencies: { c: 'npm:d@1' } }
     assert.deepEqual(findLocalDeps(pkg, ''), [])
   })
   test('flags link:, file:, workspace: and path specs in any dependency field', () => {
     const pkg = {
-      dependencies: { a: 'link:../a', b: 'workspace:^' },
-      devDependencies: { c: 'file:../c', d: '../d', e: 'C:\\x\\e' },
-      peerDependencies: { f: '/abs/f' },
+      dependencies: { a: 'link:../a', b: 'file:../b' },
+      devDependencies: { c: 'workspace:*', d: '../d' },
+      peerDependencies: { e: 'C:\\e' },
+      optionalDependencies: { f: '/abs/f' },
     }
     assert.equal(findLocalDeps(pkg, '').length, 6)
   })
-  test('flags local overrides in pnpm-workspace.yaml, ignores normal settings', () => {
-    const yaml =
-      "overrides:\n  '@strutvane/contracts': link:../contracts\nonlyBuiltDependencies:\n  - esbuild\n"
-    assert.deepEqual(findLocalDeps({}, yaml), [
-      'pnpm-workspace.yaml: @strutvane/contracts = "link:../contracts"',
+  test('flags local npm overrides, including nested ones', () => {
+    const pkg = {
+      overrides: {
+        a: '1.0.0',
+        '@strutvane/framework': 'file:../framework',
+        b: { c: 'link:../c', '.': '2.0.0' },
+      },
+    }
+    assert.deepEqual(findLocalDeps(pkg, ''), [
+      'overrides.@strutvane/framework = "file:../framework"',
+      'overrides.b.c = "link:../c"',
     ])
   })
-  test('the packages list itself is not mistaken for an override', () => {
-    assert.deepEqual(findLocalDeps({}, 'packages:\n  - packages/*\n  - ./tools/x\n'), [])
+  test('flags local overrides in a leftover pnpm-workspace.yaml, ignores normal settings', () => {
+    const ws =
+      "minimumReleaseAgeExclude:\n  - '@strutvane/*'\noverrides:\n  '@strutvane/core': link:../core\n"
+    assert.deepEqual(findLocalDeps({}, ws), [
+      'pnpm-workspace.yaml: @strutvane/core = "link:../core"',
+    ])
+  })
+})
+
+describe('findLockfileProblems (security review F-21: lockfile injection)', () => {
+  test('registry-resolved entries and bundled entries pass', () => {
+    const l = lock({
+      'node_modules/a': { version: '1.0.0', resolved: `${REG}/a/-/a-1.0.0.tgz` },
+      'node_modules/a/node_modules/b': { version: '1.0.0', inBundle: true },
+    })
+    assert.deepEqual(findLockfileProblems(l), [])
+  })
+  test('another host, a git URL, a missing resolved or a link fails', () => {
+    const l = lock({
+      'node_modules/a': { resolved: 'https://evil.example/a-1.0.0.tgz' },
+      'node_modules/b': { resolved: 'git+ssh://git@github.com/x/b.git#abc' },
+      'node_modules/c': { version: '1.0.0' },
+      'node_modules/@strutvane/framework': { resolved: '../framework', link: true },
+      // A look-alike host must not pass the prefix check.
+      'node_modules/d': { resolved: 'https://registry.npmjs.org.evil.example/d.tgz' },
+    })
+    const problems = findLockfileProblems(l)
+    assert.equal(problems.length, 5, problems.join('\n'))
+    assert.match(problems.join('\n'), /@strutvane\/framework is a local link/)
+  })
+  test('a lockfile that is not v3, or not an object, fails closed', () => {
+    const old = findLockfileProblems({ lockfileVersion: 1, dependencies: {} })
+    assert.match(old[0] ?? '', /lockfileVersion 3/)
+    assert.equal(findLockfileProblems(null).length, 1)
+    assert.equal(findLockfileProblems([]).length, 1)
   })
 })
 
 describe('findRepoLocalDeps', () => {
-  test('a single-package repo checks only its root, as before', () => {
-    const repo = makeRepo({ 'package.json': { dependencies: { a: 'link:../a' } } })
-    assert.deepEqual(findRepoLocalDeps(repo), ['dependencies.a = "link:../a"'])
-  })
-  test('checks every workspace package, prefixing problems with its path', () => {
+  test('checks package.json and package-lock.json together', () => {
     const repo = makeRepo({
-      'package.json': { name: 'ws', private: true, devDependencies: { biome: '2.6.7' } },
-      'pnpm-workspace.yaml': 'packages:\n  - packages/*\n  - tools/gen\n',
-      'packages/cli/package.json': { name: '@s/cli', dependencies: { '@s/core': 'file:../core' } },
-      'packages/launcher/package.json': {
-        name: 'strutvane',
-        dependencies: { '@s/cli': 'workspace:*' },
-      },
-      'packages/clean/package.json': { name: 'clean', dependencies: { zod: '4.6.7' } },
-      'tools/gen/package.json': { name: 'gen', private: true, devDependencies: { x: 'link:../x' } },
+      'package.json': { name: 'x', dependencies: { a: 'file:../a' } },
+      'package-lock.json': lock({ 'node_modules/a': { link: true } }),
     })
-    assert.deepEqual(findRepoLocalDeps(repo), [
-      'packages/cli/package.json: dependencies.@s/core = "file:../core"',
-      'packages/launcher/package.json: dependencies.@s/cli = "workspace:*"',
-      'tools/gen/package.json: devDependencies.x = "link:../x"',
-    ])
+    assert.equal(findRepoLocalDeps(repo).length, 2)
   })
-  test('a clean workspace passes', () => {
+  test('a clean repo passes, with or without a lockfile', () => {
+    assert.deepEqual(findRepoLocalDeps(makeRepo({ 'package.json': { name: 'x' } })), [])
     const repo = makeRepo({
-      'package.json': { name: 'ws', private: true },
-      'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
-      'packages/a/package.json': { name: 'a', dependencies: { b: '1.0.0' } },
-      'packages/b/package.json': { name: 'b' },
+      'package.json': { name: 'x', dependencies: { a: '1.0.0' } },
+      'package-lock.json': lock({ 'node_modules/a': { resolved: `${REG}/a/-/a-1.0.0.tgz` } }),
     })
     assert.deepEqual(findRepoLocalDeps(repo), [])
   })
-  test('an unreadable workspace list fails closed', () => {
-    const repo = makeRepo({
-      'package.json': { name: 'ws', private: true },
-      'pnpm-workspace.yaml': 'packages:\n  - "!packages/x"\n',
-    })
-    assert.throws(() => findRepoLocalDeps(repo), /unsupported packages entry/)
+  test('an unreadable package.json or lockfile fails closed', () => {
+    assert.throws(() => findRepoLocalDeps(makeRepo({ 'package.json': '{' })), /package\.json/)
+    assert.throws(() => findRepoLocalDeps(makeRepo({ 'package.json': '[]' })), /JSON object/)
+    const badLock = makeRepo({ 'package.json': { name: 'x' }, 'package-lock.json': 'nope' })
+    assert.throws(() => findRepoLocalDeps(badLock), /package-lock\.json/)
   })
 })
 
 describe('check-deps.mjs (script)', () => {
   const runIn = (repo) => spawnSync(process.execPath, [SCRIPT], { cwd: repo, encoding: 'utf8' })
 
-  test('exits 1 and lists the workspace package problem', () => {
-    const repo = makeRepo({
-      'package.json': { name: 'ws', private: true },
-      'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
-      'packages/a/package.json': { name: 'a', dependencies: { b: 'workspace:^' } },
-    })
-    const r = runIn(repo)
-    assert.equal(r.status, 1)
-    assert.match(r.stderr, /packages\/a\/package\.json: dependencies\.b = "workspace:\^"/)
-  })
-  test('exits 0 on a clean repo, and 1 with a message on a broken workspace file', () => {
-    assert.equal(runIn(makeRepo({ 'package.json': { name: 'x' } })).status, 0)
-    const broken = runIn(
-      makeRepo({ 'package.json': { name: 'x' }, 'pnpm-workspace.yaml': 'packages: [a]\n' }),
+  test('exits 1 and lists each problem', () => {
+    const r = runIn(
+      makeRepo({
+        'package.json': { name: 'x' },
+        'package-lock.json': lock({ 'node_modules/a': { resolved: 'https://evil.example/a.tgz' } }),
+      }),
     )
+    assert.equal(r.status, 1)
+    assert.match(r.stderr, /node_modules\/a is resolved from "https:\/\/evil\.example\/a\.tgz"/)
+  })
+  test('exits 0 on a clean repo, and 1 with a message on a broken file', () => {
+    assert.equal(runIn(makeRepo({ 'package.json': { name: 'x' } })).status, 0)
+    const broken = runIn(makeRepo({ 'package.json': '{' }))
     assert.equal(broken.status, 1)
-    assert.match(broken.stderr, /check-deps failed: .*inline/)
+    assert.match(broken.stderr, /check-deps failed: /)
   })
 })

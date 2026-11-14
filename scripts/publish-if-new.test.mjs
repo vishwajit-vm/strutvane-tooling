@@ -1,5 +1,4 @@
-// Tests for canonical/.github/scripts/publish-if-new.mjs and the workspace helpers it uses
-// (canonical/.github/scripts/workspace-packages.mjs). Run with node --test.
+// Tests for canonical/.github/scripts/publish-if-new.mjs. Run with node --test.
 import assert from 'node:assert/strict'
 import { spawnSync } from 'node:child_process'
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
@@ -10,22 +9,13 @@ import { fileURLToPath } from 'node:url'
 import {
   compareStable,
   decide,
+  declaresWorkspaces,
   distTagFor,
-  formatSummary,
-  hasFailures,
-  releaseTargets,
-  stageAll,
+  isPublishConflict,
+  releaseTarget,
+  resolveConflict,
   stagedVersions,
 } from '../canonical/.github/scripts/publish-if-new.mjs'
-import {
-  dependencyNames,
-  expandWorkspaceEntries,
-  fsListSubdirs,
-  listWorkspacePackages,
-  orderByDependencies,
-  parseWorkspaceEntry,
-  parseWorkspacePackages,
-} from '../canonical/.github/scripts/workspace-packages.mjs'
 
 const SCRIPT = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -77,10 +67,7 @@ describe('decide', () => {
   test('skips versions already on npm (idempotent re-runs)', () => {
     assert.deepEqual(
       decide({ version: '0.1.0-next.0', published: ['0.1.0-next.0'], latest: undefined }),
-      {
-        action: 'skip',
-        reason: '0.1.0-next.0 is already on npm',
-      },
+      { action: 'skip', reason: '0.1.0-next.0 is already on npm' },
     )
   })
   test('stages new pre-releases to their tag, even when only placeholders exist', () => {
@@ -153,379 +140,131 @@ describe('stagedVersions', () => {
   })
 })
 
-describe('parseWorkspacePackages', () => {
-  test('reads the block list used by the CLI repo, ignoring the keys around it', () => {
-    const yaml = [
-      'packages:',
-      '  - packages/*',
-      '',
-      '# TEMPORARY comment',
-      'overrides:',
-      '  "@strutvane/contracts": link:../contracts',
-    ].join('\n')
-    assert.deepEqual(parseWorkspacePackages(yaml), ['packages/*'])
+describe('isPublishConflict', () => {
+  test('recognises the forms npm and the registry use for "this version exists"', () => {
+    assert.ok(isPublishConflict('npm error code E409\nnpm error 409 Conflict - PUT https://x'))
+    assert.ok(isPublishConflict('You cannot publish over the previously published versions: 1.0.0'))
+    assert.ok(isPublishConflict('npm ERR! 409 Conflict'))
   })
-  test('handles quotes, comments, CRLF, a BOM, column-0 items and blank lines', () => {
-    const yaml =
-      "\uFEFFonlyBuiltDependencies:\r\n  - esbuild\r\npackages:\r\n- 'tools/a' # first\r\n\r\n  # note\r\n- \"tools/b\"\r\n- tools/c#not-a-comment\r\n- 'it''s'\r\nsettings: 1\r\n"
-    assert.deepEqual(parseWorkspacePackages(yaml), [
-      'tools/a',
-      'tools/b',
-      'tools/c#not-a-comment',
-      "it's",
-    ])
-  })
-  test('no packages key, or an empty inline list, means no workspace packages', () => {
-    assert.deepEqual(parseWorkspacePackages(''), [])
-    assert.deepEqual(parseWorkspacePackages("overrides:\n  a: '1.0.0'\n"), [])
-    assert.deepEqual(parseWorkspacePackages('packages: [] # none\n'), [])
-    assert.deepEqual(parseWorkspacePackages('packages:\nother: x\n'), [])
-  })
-  test('an indented "packages:" (a nested key) is not the workspace list', () => {
-    assert.deepEqual(parseWorkspacePackages('catalog:\n  packages: 1.0.0\n'), [])
-  })
-  test('rejects forms it does not fully understand, with a clear error', () => {
-    const bad = [
-      ['packages: [a, b]\n', /inline/],
-      ['packages: packages/*\n', /inline/],
-      ['packages:\n  - a\npackages:\n  - b\n', /more than once/],
-      ['packages:\n  - a\n    - b\n', /indentation/],
-      ['packages:\n  - a\n   - b\n', /indentation/],
-      ['packages:\n\t- a\n', /tabs/],
-      ['packages:\n  a: b\n', /only "- path" items/],
-      ['packages:\n  -a\n', /malformed list item/],
-      ['packages:\n-a\n', /malformed list item/],
-      ['packages:\n  - \n', /empty/],
-      ['packages:\n  -\n', /empty/],
-      ["packages:\n  - 'open\n", /single-quoted/],
-      ['packages:\n  - "a\\tb"\n', /double-quoted/],
-    ]
-    for (const [yaml, error] of bad) {
-      assert.throws(() => parseWorkspacePackages(yaml), error, JSON.stringify(yaml))
-    }
-  })
-  test('fuzz: never throws anything but an Error, and always returns strings', () => {
-    const pieces = ['packages:', '  - ', '- ', 'a/*', "'", '"', '#', ' ', '\n', '\t', 'x: 1', '[]']
-    let seed = 42
-    const rand = (n) => {
-      seed = (seed * 1103515245 + 12345) % 2147483648
-      return seed % n
-    }
-    for (let run = 0; run < 2000; run++) {
-      let yaml = ''
-      for (let i = rand(20); i > 0; i--) yaml += pieces[rand(pieces.length)]
-      try {
-        const out = parseWorkspacePackages(yaml)
-        assert.ok(Array.isArray(out) && out.every((e) => typeof e === 'string' && e !== ''))
-      } catch (error) {
-        assert.ok(error instanceof Error, `non-Error thrown for ${JSON.stringify(yaml)}`)
-      }
+  test('other failures are not conflicts', () => {
+    for (const out of ['npm error code E403', 'npm error code E404', 'E4090', 'ENEEDAUTH', '']) {
+      assert.equal(isPublishConflict(out), false, out)
     }
   })
 })
 
-describe('parseWorkspaceEntry', () => {
-  test('accepts plain paths and a trailing /*, normalising ./ and trailing slashes', () => {
-    assert.deepEqual(parseWorkspaceEntry('packages/cli'), { kind: 'path', dir: 'packages/cli' })
-    assert.deepEqual(parseWorkspaceEntry('./packages/cli/'), { kind: 'path', dir: 'packages/cli' })
-    assert.deepEqual(parseWorkspaceEntry('packages/*'), { kind: 'glob', parent: 'packages' })
-    assert.deepEqual(parseWorkspaceEntry('./a/b/*'), { kind: 'glob', parent: 'a/b' })
+describe('resolveConflict (409 = skip, but never hide a foreign tarball)', () => {
+  const version = '0.2.0'
+  test('staged only: skip, and name the integrity to check on approval', () => {
+    const r = resolveConflict({
+      version,
+      localIntegrity: 'sha512-A',
+      publishedIntegrity: undefined,
+    })
+    assert.equal(r.status, 'skipped')
+    assert.match(r.detail, /already staged.*sha512-A/)
   })
-  test('rejects every other form', () => {
-    for (const bad of [
-      '',
-      '*',
-      '.',
-      './',
-      '!packages/x',
-      'packages/**',
-      'packages/*/x',
-      'packages/a*',
-      'packages/{a,b}',
-      'packages/[ab]',
-      'packages/?',
-      '../outside',
-      'a/../b',
-      'a//b',
-      '/abs/path',
-      'C:/abs',
-      'packages\\cli',
+  test('published with the same tarball: skip', () => {
+    const r = resolveConflict({
+      version,
+      localIntegrity: 'sha512-A',
+      publishedIntegrity: 'sha512-A',
+    })
+    assert.equal(r.status, 'skipped')
+  })
+  test('published with another tarball: fail', () => {
+    const r = resolveConflict({
+      version,
+      localIntegrity: 'sha512-A',
+      publishedIntegrity: 'sha512-B',
+    })
+    assert.equal(r.status, 'failed')
+    assert.match(r.detail, /sha512-B.*sha512-A/)
+  })
+  test('published but our integrity is unknown: fail closed', () => {
+    const r = resolveConflict({
+      version,
+      localIntegrity: undefined,
+      publishedIntegrity: 'sha512-B',
+    })
+    assert.equal(r.status, 'failed')
+  })
+})
+
+describe('releaseTarget', () => {
+  test('a non-private root is the one package to stage', () => {
+    assert.deepEqual(
+      releaseTarget({ name: '@strutvane/framework', version: '0.2.0' }, { hasWorkspaces: false }),
+      { name: '@strutvane/framework', version: '0.2.0' },
+    )
+  })
+  test('a private root has nothing to publish', () => {
+    assert.equal(releaseTarget({ name: 'x', private: true }, { hasWorkspaces: false }), undefined)
+  })
+  test('workspaces fail closed, private root or not', () => {
+    for (const root of [
+      { name: 'x', version: '1.0.0' },
+      { name: 'x', private: true },
     ]) {
-      assert.throws(() => parseWorkspaceEntry(bad), /unsupported packages entry/, bad)
+      assert.throws(() => releaseTarget(root, { hasWorkspaces: true }), /one package/)
     }
   })
-})
-
-describe('expandWorkspaceEntries', () => {
-  test('expands globs against a listing, skips hidden folders and node_modules, sorts, dedupes', () => {
-    const listing = { packages: ['launcher', '.cache', 'cli', 'node_modules'], tools: ['x'] }
-    const list = (dir) => listing[dir] ?? []
-    assert.deepEqual(expandWorkspaceEntries(['packages/*', 'tools/x', 'packages/cli'], list), [
-      { dir: 'packages/cli', fromGlob: false },
-      { dir: 'packages/launcher', fromGlob: true },
-      { dir: 'tools/x', fromGlob: false },
-    ])
-  })
-  test('a glob over a missing folder matches nothing; a bad entry throws', () => {
-    assert.deepEqual(
-      expandWorkspaceEntries(['missing/*'], () => []),
-      [],
-    )
-    assert.throws(() => expandWorkspaceEntries(['packages/**'], () => []), /unsupported/)
-  })
-  test('works against a real directory with fsListSubdirs', () => {
-    const root = makeTree({ 'packages/b/x.txt': '', 'packages/a/x.txt': '', 'packages/file': '' })
-    assert.deepEqual(
-      expandWorkspaceEntries(['packages/*'], fsListSubdirs(root)).map((e) => e.dir),
-      ['packages/a', 'packages/b'],
-    )
-    assert.deepEqual(fsListSubdirs(root)('nope'), [])
+  test('a publishable root needs a name and a version', () => {
+    assert.throws(() => releaseTarget({ version: '1.0.0' }, { hasWorkspaces: false }), /name/)
+    assert.throws(() => releaseTarget({ name: 'x' }, { hasWorkspaces: false }), /version/)
   })
 })
 
-describe('listWorkspacePackages', () => {
-  test('reads package.json of each matched folder; glob folders without one are skipped', () => {
-    const root = makeTree({
-      'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
-      'packages/cli/package.json': { name: '@x/cli', version: '1.0.0' },
-      'packages/launcher/package.json': { name: 'x', version: '1.0.0' },
-      'packages/notes/readme.md': 'not a package',
-    })
-    assert.deepEqual(
-      listWorkspacePackages(root).map((p) => [p.dir, p.manifest.name]),
-      [
-        ['packages/cli', '@x/cli'],
-        ['packages/launcher', 'x'],
-      ],
-    )
-  })
-  test('no workspace file means no packages', () => {
-    assert.deepEqual(listWorkspacePackages(makeTree({ 'package.json': {} })), [])
-  })
-  test('an explicitly listed folder without package.json, or bad JSON, is an error', () => {
-    const missing = makeTree({ 'pnpm-workspace.yaml': 'packages:\n  - tools/x\n' })
-    assert.throws(() => listWorkspacePackages(missing), /tools\/x\/package\.json does not exist/)
-    const broken = makeTree({
-      'pnpm-workspace.yaml': 'packages:\n  - a\n',
-      'a/package.json': '{ nope',
-    })
-    assert.throws(() => listWorkspacePackages(broken), /package\.json/)
-    const notObject = makeTree({
-      'pnpm-workspace.yaml': 'packages:\n  - a\n',
-      'a/package.json': '[]',
-    })
-    assert.throws(() => listWorkspacePackages(notObject), /JSON object/)
-  })
-})
-
-describe('dependencyNames', () => {
-  test('reads dependencies, peer and optional dependencies, never devDependencies', () => {
-    const manifest = {
-      dependencies: { a: '1', b: '1' },
-      peerDependencies: { b: '1', c: '1' },
-      optionalDependencies: { d: '1' },
-      devDependencies: { e: '1' },
-    }
-    assert.deepEqual(dependencyNames(manifest), ['a', 'b', 'c', 'd'])
-    assert.deepEqual(dependencyNames({ dependencies: ['weird'] }), [])
-  })
-})
-
-describe('orderByDependencies', () => {
-  test('puts each item after what it depends on, keeping input order otherwise', () => {
-    const items = [
-      { name: 'launcher', deps: ['cli'] },
-      { name: 'solo', deps: ['external'] },
-      { name: 'cli', deps: ['core'] },
-      { name: 'core', deps: [] },
-    ]
-    assert.deepEqual(
-      orderByDependencies(items).map((i) => i.name),
-      ['core', 'cli', 'launcher', 'solo'],
-    )
-  })
-  test('a cycle is an error that names it, including a self-dependency', () => {
-    assert.throws(
-      () =>
-        orderByDependencies([
-          { name: 'a', deps: ['b'] },
-          { name: 'b', deps: ['c'] },
-          { name: 'c', deps: ['a'] },
-        ]),
-      /dependency cycle between workspace packages: a -> b -> c -> a/,
-    )
-    assert.throws(() => orderByDependencies([{ name: 'a', deps: ['a'] }]), /a -> a/)
-  })
-  test('duplicate names are an error', () => {
-    assert.throws(
-      () =>
-        orderByDependencies([
-          { name: 'a', deps: [] },
-          { name: 'a', deps: [] },
-        ]),
-      /duplicate/,
-    )
-  })
-})
-
-describe('releaseTargets', () => {
-  test('a non-private root is the single target, from the repo root (unchanged behaviour)', () => {
-    const ws = [{ dir: 'packages/x', manifest: { name: 'x', version: '1.0.0' } }]
-    assert.deepEqual(releaseTargets({ name: '@s/core', version: '0.1.0-next.0' }, ws), [
-      { name: '@s/core', version: '0.1.0-next.0', dir: '.', deps: [] },
-    ])
-  })
-  test('a private root yields non-private workspace packages in dependency order', () => {
-    const ws = [
-      {
-        dir: 'packages/cli',
-        manifest: { name: '@s/cli', version: '0.1.0-next.0', dependencies: { zod: '4' } },
-      },
-      {
-        dir: 'packages/launcher',
-        manifest: { name: 'strutvane', version: '0.1.0-next.0', peerDependencies: { z: '1' } },
-      },
-      {
-        dir: 'packages/aaa',
-        manifest: {
-          name: 'aaa',
-          version: '1.0.0',
-          optionalDependencies: { strutvane: '0.1.0-next.0' },
-          devDependencies: { internal: '1.0.0' },
-        },
-      },
-      { dir: 'packages/internal', manifest: { name: 'internal', private: true } },
-    ]
-    const targets = releaseTargets({ name: 'ws', private: true }, ws)
-    assert.deepEqual(
-      targets.map((t) => [t.name, t.dir, t.deps]),
-      [
-        ['@s/cli', 'packages/cli', []],
-        ['strutvane', 'packages/launcher', []],
-        ['aaa', 'packages/aaa', ['strutvane']],
-      ],
-    )
-  })
-  test('a private root with no publishable packages yields nothing', () => {
-    assert.deepEqual(releaseTargets({ private: true }, []), [])
-    assert.deepEqual(
-      releaseTargets({ private: true }, [{ dir: 'a', manifest: { private: true } }]),
-      [],
-    )
-  })
-  test('a publishable workspace package needs a name and version; cycles throw', () => {
-    assert.throws(
-      () => releaseTargets({ private: true }, [{ dir: 'a', manifest: { version: '1.0.0' } }]),
-      /a\/package\.json: .*"name"/,
-    )
-    assert.throws(
-      () => releaseTargets({ private: true }, [{ dir: 'a', manifest: { name: 'a' } }]),
-      /"version"/,
-    )
-    const cyclic = [
-      { dir: 'a', manifest: { name: 'a', version: '1.0.0', dependencies: { b: '1.0.0' } } },
-      { dir: 'b', manifest: { name: 'b', version: '1.0.0', peerDependencies: { a: '1.0.0' } } },
-    ]
-    assert.throws(() => releaseTargets({ private: true }, cyclic), /cycle/)
-  })
-})
-
-describe('stageAll', () => {
-  const targets = [
-    { name: 'core', version: '1.0.0', dir: 'p/core', deps: [] },
-    { name: 'cli', version: '1.0.0', dir: 'p/cli', deps: ['core'] },
-    { name: 'launcher', version: '1.0.0', dir: 'p/launcher', deps: ['cli'] },
-    { name: 'other', version: '1.0.0', dir: 'p/other', deps: [] },
-  ]
-  test('stages and skips each target in order', () => {
-    const seen = []
-    const results = stageAll(targets, (t) => {
-      seen.push(t.name)
-      return t.name === 'core'
-        ? { status: 'skipped', detail: '1.0.0 is already on npm' }
-        : { status: 'staged', detail: 'ok' }
-    })
-    assert.deepEqual(seen, ['core', 'cli', 'launcher', 'other'])
-    assert.deepEqual(
-      results.map((r) => r.status),
-      ['skipped', 'staged', 'staged', 'staged'],
-    )
-    assert.equal(hasFailures(results), false)
-  })
-  test('a failure blocks its dependents (transitively) but not unrelated packages', () => {
-    const seen = []
-    const results = stageAll(targets, (t) => {
-      seen.push(t.name)
-      if (t.name === 'core') throw new Error('npm view failed: boom')
-      return { status: 'staged', detail: 'ok' }
-    })
-    assert.deepEqual(seen, ['core', 'other'])
-    assert.deepEqual(
-      results.map((r) => [r.name, r.status]),
-      [
-        ['core', 'failed'],
-        ['cli', 'blocked'],
-        ['launcher', 'blocked'],
-        ['other', 'staged'],
-      ],
-    )
-    assert.match(results[0]?.detail ?? '', /boom/)
-    assert.match(results[1]?.detail ?? '', /depends on core/)
-    assert.equal(hasFailures(results), true)
-  })
-  test('a returned failure (npm exit code) counts like a thrown one', () => {
-    const results = stageAll(targets.slice(0, 2), (t) =>
-      t.name === 'core'
-        ? { status: 'failed', detail: 'npm stage publish exited with code 1', code: 1 }
-        : { status: 'staged', detail: 'ok' },
-    )
-    assert.deepEqual(
-      results.map((r) => r.status),
-      ['failed', 'blocked'],
-    )
-  })
-  test('non-Error throws are reported too', () => {
-    const [result] = stageAll(targets.slice(0, 1), () => {
-      throw 'plain string'
-    })
-    assert.equal(result?.status, 'failed')
-    assert.equal(result?.detail, 'plain string')
-  })
-})
-
-describe('formatSummary', () => {
-  test('one line per package with status, name, version, folder and detail', () => {
-    const text = formatSummary([
-      { name: 'a', version: '1.0.0', dir: 'p/a', status: 'staged', detail: 'ok' },
-      { name: 'b', version: '2.0.0', dir: 'p/b', status: 'blocked', detail: 'needs a' },
-    ])
+describe('declaresWorkspaces', () => {
+  test('npm "workspaces" or a pnpm "packages:" list counts; pnpm settings alone do not', () => {
+    assert.equal(declaresWorkspaces(makeTree({}), { workspaces: ['a'] }), true)
     assert.equal(
-      text,
-      'Summary: 2 package(s), 1 failed\n  staged  a@1.0.0 (p/a): ok\n  blocked b@2.0.0 (p/b): needs a\n',
+      declaresWorkspaces(makeTree({ 'pnpm-workspace.yaml': 'packages:\n  - packages/*\n' }), {}),
+      true,
     )
+    const settingsOnly = makeTree({
+      'pnpm-workspace.yaml': 'minimumReleaseAgeExclude:\n  - "@strutvane/*"\n',
+    })
+    assert.equal(declaresWorkspaces(settingsOnly, {}), false)
+    assert.equal(declaresWorkspaces(makeTree({}), {}), false)
   })
 })
 
 // End to end: run the real script against a temp repo with a fake `npm` first on PATH. The fake
-// records each call (working directory and arguments) and never touches the network.
+// records each call and never touches the network.
 describe('publish-if-new.mjs end to end (fake npm)', () => {
   const FAKE_NPM = `
-import { appendFileSync, readFileSync } from 'node:fs'
+import { appendFileSync } from 'node:fs'
 const args = process.argv.slice(2)
-const pkg = JSON.parse(readFileSync('package.json', 'utf8'))
-appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ pkg: pkg.name, args }) + '\\n')
-const published = JSON.parse(process.env.FAKE_NPM_PUBLISHED || '{}')
-const fail = (process.env.FAKE_NPM_FAIL || '').split(',')
+appendFileSync(process.env.FAKE_NPM_LOG, JSON.stringify({ args }) + '\\n')
+const published = JSON.parse(process.env.FAKE_NPM_PUBLISHED || '[]')
+const mode = process.env.FAKE_NPM_STAGE || 'ok'
+if (args[0] === 'view' && args[2] === 'dist.integrity') {
+  const remote = process.env.FAKE_NPM_REMOTE_INTEGRITY
+  if (remote) process.stdout.write(JSON.stringify(remote))
+  process.exit(0)
+}
 if (args[0] === 'view') {
-  if (published[args[1]]) {
-    process.stdout.write(JSON.stringify({ versions: published[args[1]], 'dist-tags': {} }))
+  if (published.length) {
+    process.stdout.write(JSON.stringify({ versions: published, 'dist-tags': {} }))
     process.exit(0)
   }
   process.stderr.write('npm error code E404')
   process.exit(1)
 }
+if (args[0] === 'pack') {
+  process.stdout.write(JSON.stringify([{ integrity: 'sha512-LOCAL' }]))
+  process.exit(0)
+}
 if (args[0] === 'stage' && args[1] === 'list') { process.stdout.write('[]'); process.exit(0) }
-if (args[0] === 'stage' && args[1] === 'publish') process.exit(fail.includes(pkg.name) ? 3 : 0)
+if (args[0] === 'stage' && args[1] === 'publish') {
+  if (mode === 'conflict') {
+    process.stderr.write('npm error code E409\\nnpm error 409 Conflict - PUT')
+    process.exit(1)
+  }
+  if (mode === 'fail') { process.stderr.write('npm error code E403'); process.exit(3) }
+  process.exit(0)
+}
 process.exit(2)
 `
 
@@ -551,88 +290,75 @@ process.exit(2)
     const calls = readFileSync(log, 'utf8')
       .split('\n')
       .filter(Boolean)
-      .map((line) => JSON.parse(line))
+      .map((line) => JSON.parse(line).args.join(' '))
     return { status: r.status, out: r.stdout, err: r.stderr, calls }
   }
 
-  const cliRepo = () =>
-    makeTree({
-      'package.json': { name: 'strutvane-cli-workspace', version: '0.0.0', private: true },
-      'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
-      'packages/launcher/package.json': {
-        name: 'strutvane',
-        version: '0.1.0-next.0',
-        dependencies: { '@strutvane/cli': '0.1.0-next.0' },
-      },
-      'packages/cli/package.json': { name: '@strutvane/cli', version: '0.1.0-next.0' },
-      'packages/private-tool/package.json': { name: 'tool', version: '1.0.0', private: true },
+  const repo = () =>
+    makeTree({ 'package.json': { name: '@strutvane/framework', version: '0.2.0' } })
+  const stages = (calls) => calls.filter((c) => c.startsWith('stage publish'))
+
+  test('stages a new version with provenance and its dist-tag', () => {
+    const r = run(repo())
+    assert.equal(r.status, 0, r.err)
+    assert.deepEqual(stages(r.calls), ['stage publish --access public --provenance --tag latest'])
+    assert.match(r.out, /staged: @strutvane\/framework@0\.2\.0/)
+  })
+
+  test('re-runs are idempotent: a published version is skipped without staging', () => {
+    const r = run(repo(), { FAKE_NPM_PUBLISHED: JSON.stringify(['0.2.0']) })
+    assert.equal(r.status, 0, r.err)
+    assert.deepEqual(stages(r.calls), [])
+    assert.match(r.out, /skip: .*already on npm/)
+  })
+
+  test('409 on a staged-only version is a skip that prints the integrity to check', () => {
+    const r = run(repo(), { FAKE_NPM_STAGE: 'conflict' })
+    assert.equal(r.status, 0, r.err)
+    assert.match(r.out, /skip: .*already staged \(npm 409\).*sha512-LOCAL/)
+    assert.ok(r.calls.some((c) => c.startsWith('pack --dry-run --json --ignore-scripts')))
+  })
+
+  test('409 on a published version with the same tarball is a skip', () => {
+    const r = run(repo(), {
+      FAKE_NPM_STAGE: 'conflict',
+      FAKE_NPM_REMOTE_INTEGRITY: 'sha512-LOCAL',
     })
-
-  const stageCalls = (calls) =>
-    calls.filter((c) => c.args[0] === 'stage' && c.args[1] === 'publish').map((c) => c.pkg)
-
-  test('private root: stages each workspace package from its own folder, deps first', () => {
-    const r = run(cliRepo())
     assert.equal(r.status, 0, r.err)
-    assert.deepEqual(stageCalls(r.calls), ['@strutvane/cli', 'strutvane'])
-    // Every npm call ran inside the package's folder (the fake reads ./package.json).
-    for (const call of r.calls) assert.ok(['@strutvane/cli', 'strutvane'].includes(call.pkg))
-    assert.match(r.out, /staged +@strutvane\/cli@0\.1\.0-next\.0 \(packages\/cli\)/)
-    assert.match(r.out, /staged +strutvane@0\.1\.0-next\.0 \(packages\/launcher\)/)
+    assert.match(r.out, /skip: .*this exact tarball/)
   })
 
-  test('re-runs are idempotent: published versions are skipped', () => {
-    const published = JSON.stringify({ '@strutvane/cli': ['0.1.0-next.0'] })
-    const r = run(cliRepo(), { FAKE_NPM_PUBLISHED: published })
-    assert.equal(r.status, 0, r.err)
-    assert.deepEqual(stageCalls(r.calls), ['strutvane'])
-    assert.match(r.out, /skipped @strutvane\/cli/)
-  })
-
-  test('a failed package blocks its dependents, others still run, exit is non-zero', () => {
-    const repo = cliRepo()
-    mkdirSync(join(repo, 'packages/other'))
-    writeFileSync(
-      join(repo, 'packages/other/package.json'),
-      JSON.stringify({ name: 'other', version: '1.0.0' }),
-    )
-    const r = run(repo, { FAKE_NPM_FAIL: '@strutvane/cli' })
+  test('409 on a published version with a different tarball fails', () => {
+    const r = run(repo(), {
+      FAKE_NPM_STAGE: 'conflict',
+      FAKE_NPM_REMOTE_INTEGRITY: 'sha512-EVIL',
+    })
     assert.equal(r.status, 1)
-    assert.deepEqual(stageCalls(r.calls), ['@strutvane/cli', 'other'])
-    assert.match(r.out, /failed +@strutvane\/cli.*exited with code 3/)
-    assert.match(r.out, /blocked strutvane.*depends on @strutvane\/cli/)
-    assert.match(r.out, /staged +other@1\.0\.0/)
+    assert.match(r.out, /failed: .*sha512-EVIL/)
   })
 
-  test('non-private root: one package from the repo root, as before', () => {
-    const repo = makeTree({
-      'package.json': { name: '@strutvane/core', version: '0.1.0-next.0' },
-      'pnpm-workspace.yaml': "overrides:\n  '@strutvane/contracts': 0.1.0-next.0\n",
-    })
-    const r = run(repo)
-    assert.equal(r.status, 0, r.err)
-    assert.deepEqual(stageCalls(r.calls), ['@strutvane/core'])
-    assert.match(r.out, /staging @strutvane\/core@0\.1\.0-next\.0 with tag "next"/)
-    assert.doesNotMatch(r.out, /Summary/)
-    const failed = run(repo, { FAKE_NPM_FAIL: '@strutvane/core' })
-    assert.equal(failed.status, 3, 'the npm exit code is passed through, as before')
+  test('any other npm failure passes its exit code through', () => {
+    const r = run(repo(), { FAKE_NPM_STAGE: 'fail' })
+    assert.equal(r.status, 3)
+    assert.match(r.out, /failed: .*exited with code 3/)
   })
 
-  test('private root without workspace packages has nothing to publish', () => {
+  test('a private root has nothing to publish and calls npm not at all', () => {
     const r = run(makeTree({ 'package.json': { name: 'meta', private: true } }))
     assert.equal(r.status, 0, r.err)
     assert.match(r.out, /meta is private, nothing to publish/)
     assert.deepEqual(r.calls, [])
   })
 
-  test('an unsupported workspace entry fails before any npm call', () => {
-    const repo = makeTree({
-      'package.json': { name: 'ws', private: true },
-      'pnpm-workspace.yaml': 'packages:\n  - packages/**\n',
-    })
-    const r = run(repo)
+  test('a repo with workspaces fails before any npm call', () => {
+    const r = run(
+      makeTree({
+        'package.json': { name: 'ws', private: true },
+        'pnpm-workspace.yaml': 'packages:\n  - packages/*\n',
+      }),
+    )
     assert.equal(r.status, 1)
-    assert.match(r.err, /publish failed: .*unsupported packages entry "packages\/\*\*"/)
+    assert.match(r.err, /publish failed: .*one package/)
     assert.deepEqual(r.calls, [])
   })
 })
