@@ -1,10 +1,20 @@
 // Tests for scripts/sync.mjs, run with Node's built-in test runner: `node --test`.
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { afterEach, beforeEach, describe, test } from 'node:test'
-import { applySync, normalize, parseArgs, parseManifest, planSync } from './sync.mjs'
+import { fileURLToPath } from 'node:url'
+import {
+  applySync,
+  DRIFT,
+  formatReport,
+  normalize,
+  parseArgs,
+  parseManifest,
+  planSync,
+} from './sync.mjs'
 
 /** @type {string} */
 let dir
@@ -194,5 +204,147 @@ describe('parseArgs', () => {
     assert.throws(() => parseArgs(['--nope']), /unknown argument/)
     assert.throws(() => parseArgs(['--repo']), /needs a value/)
     assert.throws(() => parseArgs(['--repo', '--check']), /needs a value/)
+  })
+})
+
+describe('retired files and target notes', () => {
+  /** A fixture with one retired file, present in one repo and absent from another. */
+  function retiredFixture() {
+    const f = fixture()
+    write(join(f.rootDir, 'withcode/.github/scripts/old.mjs'), 'old\n')
+    const manifest = parseManifest({
+      targets: [{ name: 'withcode', profile: 'library', note: 'a note' }, 'nocode', 'absent'],
+      files: [{ path: '.editorconfig', when: 'always' }],
+      retired: [{ path: '.github/scripts/old.mjs', reason: 'replaced by new.mjs' }],
+    })
+    return { ...f, manifest }
+  }
+
+  test('a target note is kept; a non-string note is rejected', () => {
+    const m = retiredFixture().manifest
+    assert.equal(m.targets[0]?.note, 'a note')
+    assert.throws(
+      () =>
+        parseManifest({
+          targets: [{ name: 'x', profile: 'library', note: 3 }],
+          files: [{ path: 'a', when: 'always' }],
+        }),
+      /note/,
+    )
+  })
+
+  test('retired entries are validated like files and must give a reason', () => {
+    const base = { targets: ['core'], files: [{ path: 'a', when: 'always' }] }
+    assert.deepEqual(parseManifest(base).retired, [])
+    assert.throws(() => parseManifest({ ...base, retired: {} }), /retired/)
+    assert.throws(
+      () => parseManifest({ ...base, retired: [{ path: '../x', reason: 'r' }] }),
+      /relative/,
+    )
+    assert.throws(() => parseManifest({ ...base, retired: [{ path: 'x' }] }), /reason/)
+    assert.throws(() => parseManifest({ ...base, retired: [{ path: 'a', reason: 'r' }] }), /both/)
+  })
+
+  test('a retired file still present is drift; absent, or in a missing repo, it is nothing', () => {
+    const actions = planSync(retiredFixture())
+    const retired = actions.filter((a) => a.status === 'retired')
+    assert.deepEqual(
+      retired.map((a) => [a.repo, a.path, a.reason]),
+      [['withcode', '.github/scripts/old.mjs', 'replaced by new.mjs']],
+    )
+    assert.ok(DRIFT.includes('retired'))
+  })
+
+  test('sync never deletes a retired file', () => {
+    const f = retiredFixture()
+    applySync(planSync(f))
+    assert.ok(existsSync(join(f.rootDir, 'withcode/.github/scripts/old.mjs')))
+  })
+
+  test('the report tells you to delete retired files and lists missing repos once', () => {
+    const report = formatReport(planSync(retiredFixture()), { check: true, dryRun: false })
+    assert.match(
+      report,
+      /! withcode\/\.github\/scripts\/old\.mjs \(retired: delete it in that repo\. replaced by new\.mjs\)/,
+    )
+    assert.match(report, /\? absent \(folder not found, skipped\)/)
+    assert.equal(report.match(/\? absent/g)?.length, 1)
+    assert.match(report, /Run: npm run sync/)
+  })
+})
+
+// End to end: the real CLI, real manifest.json and real canonical/ files, against a throw-away
+// copy of the repo layout. Proves idempotence and the --check / --dry-run contract.
+describe('sync.mjs CLI on the real manifest', () => {
+  const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), 'sync.mjs')
+  /** Run the CLI with `--root <dir>/packages`, so the hub target is `<dir>`. */
+  const cli = (...args) =>
+    spawnSync(process.execPath, [SCRIPT, '--root', join(dir, 'packages'), ...args], {
+      encoding: 'utf8',
+    })
+  /** Library repos with a package.json, a site repo, and the hub; other targets are missing. */
+  function layout() {
+    for (const repo of ['framework', 'auth', 'docs']) {
+      write(join(dir, 'packages', repo, 'package.json'), '{}')
+    }
+  }
+
+  test('--check fails on drift, sync fixes it, a second sync writes nothing, --check passes', () => {
+    layout()
+    const before = cli('--check')
+    assert.equal(before.status, 1, before.stderr)
+    assert.match(before.stdout, /\+ framework\/\.npmrc \(create\)/)
+    assert.match(before.stdout, /\+ framework\/\.github\/workflows\/ci\.yml \(create\)/)
+    // Missing repos are reported once each and never fail the check by themselves.
+    assert.match(before.stdout, /\? ui \(folder not found, skipped\)/)
+    assert.doesNotMatch(before.stdout, /\bcore\b|contracts|devkit/)
+
+    const first = cli()
+    assert.equal(first.status, 0, first.stderr)
+    assert.match(first.stdout, /Wrote \d+ file\(s\)/)
+    const second = cli()
+    assert.match(second.stdout, /Wrote 0 file\(s\)/)
+    const after = cli('--check')
+    assert.equal(after.status, 0, after.stdout)
+    assert.match(after.stdout, /All repos are in sync\./)
+    // Profiles: the site repo and the hub got the shared memory but no library configs.
+    assert.ok(existsSync(join(dir, 'packages/docs/.claude/ECOSYSTEM.md')))
+    assert.ok(!existsSync(join(dir, 'packages/docs/.npmrc')))
+    assert.ok(existsSync(join(dir, '.claude/ECOSYSTEM.md')))
+    assert.ok(!existsSync(join(dir, '.github/workflows/ci.yml')))
+  })
+
+  test('a leftover retired file fails --check until it is deleted by hand', () => {
+    layout()
+    cli()
+    write(join(dir, 'packages/auth/.github/scripts/workspace-packages.mjs'), '// old\n')
+    const r = cli('--check')
+    assert.equal(r.status, 1)
+    assert.match(r.stdout, /! auth\/\.github\/scripts\/workspace-packages\.mjs \(retired/)
+    rmSync(join(dir, 'packages/auth/.github/scripts/workspace-packages.mjs'))
+    assert.equal(cli('--check').status, 0)
+  })
+
+  test('--dry-run reports and writes nothing; an absorbed repo name is refused', () => {
+    layout()
+    const r = cli('--dry-run')
+    assert.equal(r.status, 0, r.stderr)
+    assert.match(r.stdout, /Dry run: \d+ file\(s\) out of sync/)
+    assert.ok(!existsSync(join(dir, 'packages/framework/.npmrc')))
+    const absorbed = cli('--repo', 'core')
+    assert.equal(absorbed.status, 2)
+    assert.match(absorbed.stderr, /unknown repo\(s\): core/)
+  })
+
+  test('a locally edited synced file is drift that sync restores', () => {
+    layout()
+    cli()
+    const file = join(dir, 'packages/framework/.github/workflows/ci.yml')
+    writeFileSync(file, readFileSync(file, 'utf8').replace('npm ci', 'npm install'))
+    const r = cli('--check', '--repo', 'framework')
+    assert.equal(r.status, 1)
+    assert.match(r.stdout, /~ framework\/\.github\/workflows\/ci\.yml \(update\)/)
+    cli('--repo', 'framework')
+    assert.equal(cli('--check', '--repo', 'framework').status, 0)
   })
 })

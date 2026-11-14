@@ -11,7 +11,7 @@
  *   node scripts/sync.mjs                 # write changes
  *   node scripts/sync.mjs --check         # report drift, exit 1 if any (use in CI / pre-release)
  *   node scripts/sync.mjs --dry-run       # show what would change, write nothing
- *   node scripts/sync.mjs --repo contracts --repo core
+ *   node scripts/sync.mjs --repo framework --repo auth
  *   node scripts/sync.mjs --root ../      # folder that contains the package repos (default: ..)
  *
  * Guarantees:
@@ -19,7 +19,11 @@
  *   - Line endings are normalised to LF before comparing and writing, so Git's autocrlf on
  *     Windows never shows false drift.
  *   - Never deletes files. Never touches files that are not listed in manifest.json.
- *   - A missing target repo folder is reported and skipped, never created.
+ *   - A missing target repo folder (not cloned yet, or not created yet) is reported and skipped,
+ *     never created, and never fails `--check`.
+ *   - A file the manifest lists under `retired` (no longer canonical) that still exists in a repo
+ *     is reported as drift, so `--check` fails until someone deletes it in that repo. Sync itself
+ *     still never deletes it.
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
@@ -34,10 +38,14 @@ import { fileURLToPath } from 'node:url'
  * @typedef {'library' | 'site' | 'meta'} Profile
  */
 /** @typedef {{ path: string, when: When, profiles: Profile[] }} ManifestFile */
-/** @typedef {{ name: string, dir: string, profile: Profile }} Target */
-/** @typedef {{ targets: Target[], files: ManifestFile[] }} Manifest */
-/** @typedef {'create' | 'update' | 'unchanged' | 'skipped-no-package-json' | 'skipped-missing-repo' | 'skipped-profile'} Status */
-/** @typedef {{ repo: string, path: string, status: Status, target: string, content?: string }} Action */
+/** @typedef {{ path: string, reason: string, profiles: Profile[] }} RetiredFile */
+/** @typedef {{ name: string, dir: string, profile: Profile, note?: string }} Target */
+/** @typedef {{ targets: Target[], files: ManifestFile[], retired: RetiredFile[] }} Manifest */
+/** @typedef {'create' | 'update' | 'unchanged' | 'retired' | 'skipped-no-package-json' | 'skipped-missing-repo' | 'skipped-profile'} Status */
+/** @typedef {{ repo: string, path: string, status: Status, target: string, content?: string, reason?: string }} Action */
+
+/** Statuses that mean a repo differs from what tooling wants (`--check` fails on them). */
+export const DRIFT = /** @type {readonly Status[]} */ (['create', 'update', 'retired'])
 
 /** @type {readonly Profile[]} */
 const PROFILES = ['library', 'site', 'meta']
@@ -71,34 +79,71 @@ export function parseManifest(value) {
     throw new Error('manifest: "files" must be a non-empty array')
   const files = m.files.map((f, i) => {
     const file = /** @type {Record<string, unknown>} */ (f ?? {})
-    if (
-      typeof file.path !== 'string' ||
-      file.path.length === 0 ||
-      file.path.includes('..') ||
-      file.path.startsWith('/')
-    ) {
-      throw new Error(`manifest: files[${i}].path must be a relative path inside the repo`)
-    }
+    const where = `files[${i}]`
     if (file.when !== 'always' && file.when !== 'hasPackageJson') {
-      throw new Error(`manifest: files[${i}].when must be "always" or "hasPackageJson"`)
-    }
-    const profiles = file.profiles === undefined ? [...PROFILES] : file.profiles
-    if (
-      !Array.isArray(profiles) ||
-      profiles.length === 0 ||
-      profiles.some((p) => !PROFILES.includes(p))
-    ) {
-      throw new Error(
-        `manifest: files[${i}].profiles must list one or more of ${PROFILES.join(', ')}`,
-      )
+      throw new Error(`manifest: ${where}.when must be "always" or "hasPackageJson"`)
     }
     return {
-      path: file.path,
+      path: parsePath(file.path, where),
       when: /** @type {When} */ (file.when),
-      profiles: /** @type {Profile[]} */ (profiles),
+      profiles: parseProfiles(file.profiles, where),
     }
   })
-  return { targets, files }
+
+  const retiredList = m.retired === undefined ? [] : m.retired
+  if (!Array.isArray(retiredList)) throw new Error('manifest: "retired" must be an array')
+  const retired = retiredList.map((r, i) => {
+    const entry = /** @type {Record<string, unknown>} */ (r ?? {})
+    const where = `retired[${i}]`
+    if (typeof entry.reason !== 'string' || entry.reason.trim() === '') {
+      throw new Error(`manifest: ${where}.reason must say why the file was retired`)
+    }
+    return {
+      path: parsePath(entry.path, where),
+      reason: entry.reason,
+      profiles: parseProfiles(entry.profiles, where),
+    }
+  })
+  const active = new Set(files.map((f) => f.path))
+  const clash = retired.find((r) => active.has(r.path))
+  if (clash) throw new Error(`manifest: "${clash.path}" is listed in both "files" and "retired"`)
+  return { targets, files, retired }
+}
+
+/**
+ * A manifest path: relative, inside the repo, no traversal.
+ * @param {unknown} path
+ * @param {string} where
+ * @returns {string}
+ */
+function parsePath(path, where) {
+  if (
+    typeof path !== 'string' ||
+    path.length === 0 ||
+    path.includes('..') ||
+    path.startsWith('/')
+  ) {
+    throw new Error(`manifest: ${where}.path must be a relative path inside the repo`)
+  }
+  return path
+}
+
+/**
+ * A `profiles` list; omitted means every profile.
+ * @param {unknown} value
+ * @param {string} where
+ * @returns {Profile[]}
+ */
+function parseProfiles(value, where) {
+  const profiles = value === undefined ? [...PROFILES] : value
+  if (
+    !Array.isArray(profiles) ||
+    profiles.length === 0 ||
+    profiles.some((p) => !PROFILES.includes(p))
+  ) {
+    throw new Error(`manifest: ${where}.profiles must list one or more of ${PROFILES.join(', ')}`)
+  }
+  return /** @type {Profile[]} */ (profiles)
 }
 
 /**
@@ -126,7 +171,13 @@ function parseTarget(value, index) {
   if (typeof t.profile !== 'string' || !PROFILES.includes(/** @type {Profile} */ (t.profile))) {
     throw new Error(`manifest: targets[${index}].profile must be one of ${PROFILES.join(', ')}`)
   }
-  return { name: t.name, dir, profile: /** @type {Profile} */ (t.profile) }
+  if (t.note !== undefined && typeof t.note !== 'string') {
+    throw new Error(`manifest: targets[${index}].note must be a string`)
+  }
+  /** @type {Target} */
+  const target = { name: t.name, dir, profile: /** @type {Profile} */ (t.profile) }
+  if (typeof t.note === 'string') target.note = t.note
+  return target
 }
 
 /**
@@ -178,6 +229,15 @@ export function planSync({ canonicalDir, rootDir, manifest, repos }) {
           target,
           content,
         })
+      }
+    }
+    // Retired files: only reported when the repo still has them.
+    if (!hasRepo) continue
+    for (const file of manifest.retired) {
+      if (!file.profiles.includes(profile)) continue
+      const target = join(repoDir, file.path)
+      if (existsSync(target)) {
+        actions.push({ repo, path: file.path, status: 'retired', target, reason: file.reason })
       }
     }
   }
@@ -232,37 +292,47 @@ function main() {
     repos: opts.repos,
   })
 
-  /** @type {Record<Status, string>} */
-  const symbol = {
-    create: '+',
-    update: '~',
-    unchanged: '=',
-    'skipped-no-package-json': '-',
-    'skipped-missing-repo': '?',
-    'skipped-profile': '-',
-  }
-  /** Statuses that are expected and need no attention, so they are not printed. */
-  const quiet = new Set(['unchanged', 'skipped-no-package-json', 'skipped-profile'])
-  for (const a of actions) {
-    if (quiet.has(a.status)) continue
-    process.stdout.write(`${symbol[a.status]} ${a.repo}/${a.path} (${a.status})\n`)
-  }
-  const drift = actions.filter((a) => a.status === 'create' || a.status === 'update')
-  const summary = `${drift.length} file(s) out of sync across ${new Set(drift.map((a) => a.repo)).size} repo(s)`
-
+  process.stdout.write(formatReport(actions, opts))
+  const drift = actions.filter((a) => DRIFT.includes(a.status))
   if (opts.check) {
-    process.stdout.write(
-      drift.length === 0 ? 'All repos are in sync.\n' : `${summary}. Run: pnpm sync\n`,
-    )
     process.exitCode = drift.length === 0 ? 0 : 1
     return
   }
-  if (opts.dryRun) {
-    process.stdout.write(`Dry run: ${summary}. Nothing written.\n`)
-    return
-  }
+  if (opts.dryRun) return
   const written = applySync(actions)
   process.stdout.write(`Wrote ${written} file(s). Review and commit the changes in each repo.\n`)
+}
+
+/**
+ * The human-readable report for a plan: one line per file that needs attention, one line per
+ * missing repo (not per file), and a summary. Exported for tests.
+ * @param {Action[]} actions
+ * @param {{ check: boolean, dryRun: boolean }} mode
+ * @returns {string}
+ */
+export function formatReport(actions, { check, dryRun }) {
+  /** @type {Partial<Record<Status, string>>} */
+  const symbol = { create: '+', update: '~', retired: '!' }
+  const lines = []
+  /** @type {Set<string>} */
+  const missing = new Set()
+  for (const a of actions) {
+    if (a.status === 'skipped-missing-repo') {
+      missing.add(a.repo)
+      continue
+    }
+    const mark = symbol[a.status]
+    if (!mark) continue
+    const extra = a.status === 'retired' ? `: delete it in that repo. ${a.reason ?? ''}` : ''
+    lines.push(`${mark} ${a.repo}/${a.path} (${a.status}${extra})`)
+  }
+  for (const repo of missing) lines.push(`? ${repo} (folder not found, skipped)`)
+  const drift = actions.filter((a) => DRIFT.includes(a.status))
+  const summary = `${drift.length} file(s) out of sync across ${new Set(drift.map((a) => a.repo)).size} repo(s)`
+  if (check)
+    lines.push(drift.length === 0 ? 'All repos are in sync.' : `${summary}. Run: npm run sync`)
+  else if (dryRun) lines.push(`Dry run: ${summary}. Nothing written.`)
+  return lines.length === 0 ? '' : `${lines.join('\n')}\n`
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
