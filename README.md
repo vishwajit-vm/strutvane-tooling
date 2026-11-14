@@ -40,7 +40,10 @@ Every target repo has a **profile**, so each repo only gets what makes sense for
 | `biome.base.json` | Formatting and lint rules (Biome). Repos `extends` it from their own `biome.json`. | library, once it has a `package.json` |
 | `vitest.shared.ts` | Test defaults: no silent passes, type-level tests on, coverage thresholds (90/90/85/90). Repos merge it in `vitest.config.ts`. | library, once it has a `package.json` |
 | `.github/workflows/ci.yml` | Quality gate on Linux, Windows and macOS × Node 24 and 26, with actions pinned to commit SHAs. | library, once it has a `package.json` |
-| `.github/workflows/release.yml` | Changesets release PR, then npm **trusted publishing** (OIDC, no tokens) with provenance. Gated behind the repo variable `RELEASE_ENABLED=true`. | library, once it has a `package.json` |
+| `.github/workflows/release.yml` | On every push to `main`: quality gate, then **stages** every new version on npm through trusted publishing (OIDC, no tokens) with provenance. A maintainer approves each staged version on npmjs.com with 2FA ([ADR-0016](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0016-release-flow-version-on-main.md), [ADR-0018](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0018-staged-npm-publishing.md)). Gated behind the repo variable `RELEASE_ENABLED=true`. | library, once it has a `package.json` |
+| `.github/scripts/publish-if-new.mjs` | Stages each package whose version is neither published nor staged. One package from the root, or, when the root is private, every non-private `pnpm-workspace.yaml` package from its own folder, in dependency order. | library, once it has a `package.json` |
+| `.github/scripts/check-deps.mjs` | Fails on `link:`/`file:`/`workspace:`/path dependencies in the root and every workspace package, and on local overrides. | library, once it has a `package.json` |
+| `.github/scripts/workspace-packages.mjs` | Shared, dependency-free reader for `pnpm-workspace.yaml` `packages:` (plain paths and `dir/*` only; anything else is rejected). | library, once it has a `package.json` |
 | `.github/dependabot.yml` | Weekly grouped updates for actions and npm deps. | any repo with a `package.json` |
 
 The list and the profiles live in [`manifest.json`](manifest.json). Changing the shared memory works like any other config: edit `canonical/.claude/ECOSYSTEM.md`, run `pnpm sync`, and commit in each repo.
@@ -83,16 +86,14 @@ node scripts/sync.mjs --repo contracts --repo core   # only some repos
 
 ## Releasing packages (trusted publishing)
 
-Releases use [Changesets](https://github.com/changesets/changesets) with npm **trusted publishing**. No npm token exists anywhere.
+Versions are bumped in normal commits on `main` (`changeset version`, then `chore(release): <name>@<version>`). CI then **stages** every version that is new, using npm **trusted publishing**, and a maintainer approves each one on npmjs.com with 2FA. No npm token exists anywhere, and a CI run alone can never make a version live (ADR-0016, ADR-0018).
 
-**One-time setup per package on npmjs.com:**
+A repo with a private root and several packages in `pnpm-workspace.yaml` (such as strutvane-cli) gets each non-private workspace package staged from its own folder, dependencies first. Those packages must depend on each other by exact published version, never `workspace:`, because `npm stage publish` does not rewrite that protocol; `check-deps.mjs` enforces it.
+
+**One-time setup per published package on npmjs.com** (each workspace package needs its own):
 1. Open **Package → Settings → Trusted publishing → GitHub Actions**.
-2. Set the owner to `vishwajit-vm`, the repository to the package's repo, and the workflow to `release.yml`.
-3. After the first successful trusted publish, set **"Require 2FA and disallow tokens"**.
-
-**Each repo needs these scripts:** `version-packages` (`changeset version`) and `release` (`changeset publish`).
-
-> First-release checklist: confirm the publish step uses npm ≥ 11.5 OIDC, and that the provenance badge appears on npmjs.com. Record the result in the repo's `CHANGELOG`.
+2. Set the owner to `vishwajit-vm`, the repository to the package's repo, the workflow to `release.yml`, no environment, and leave both **"Allow npm publish"** and **"Allow npm dist-tag"** unticked (staging only).
+3. Set the repo variable `RELEASE_ENABLED=true`.
 
 ## Developing this repo
 

@@ -126,6 +126,11 @@
       "profiles": ["library"]
     },
     {
+      "path": ".github/scripts/workspace-packages.mjs",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
       "path": ".github/workflows/scorecard.yml",
       "when": "hasPackageJson",
       "profiles": ["library", "meta"]
