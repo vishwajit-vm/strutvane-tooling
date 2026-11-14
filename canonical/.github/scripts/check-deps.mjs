@@ -145,9 +145,10 @@ function main() {
     process.exitCode = 1
     return
   }
-  process.stdout.write(
-    'No local-only dependencies; the lockfile resolves only from the npm registry.\n',
-  )
+  const lock = existsSync(join(process.cwd(), 'package-lock.json'))
+    ? 'package-lock.json resolves only from the npm registry'
+    : 'no package-lock.json to check'
+  process.stdout.write(`No local-only dependencies; ${lock}.\n`)
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

@@ -145,7 +145,12 @@ describe('check-deps.mjs (script)', () => {
     assert.match(r.stderr, /node_modules\/a is resolved from "https:\/\/evil\.example\/a\.tgz"/)
   })
   test('exits 0 on a clean repo, and 1 with a message on a broken file', () => {
-    assert.equal(runIn(makeRepo({ 'package.json': { name: 'x' } })).status, 0)
+    const clean = runIn(makeRepo({ 'package.json': { name: 'x' } }))
+    assert.equal(clean.status, 0)
+    assert.match(clean.stdout, /no package-lock\.json to check/)
+    const locked = runIn(makeRepo({ 'package.json': { name: 'x' }, 'package-lock.json': lock({}) }))
+    assert.equal(locked.status, 0)
+    assert.match(locked.stdout, /package-lock\.json resolves only from the npm registry/)
     const broken = runIn(makeRepo({ 'package.json': '{' }))
     assert.equal(broken.status, 1)
     assert.match(broken.stderr, /check-deps failed: /)
