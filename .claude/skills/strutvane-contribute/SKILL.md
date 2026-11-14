@@ -18,26 +18,27 @@ description: The standard workflow for making any change in any Strutvane repo â
 
 ## 2. Make the change
 
-1. Confirm a green baseline:
+1. Confirm a green baseline (npm only, npm >= 11.19; never pnpm or corepack):
    ```
-   corepack pnpm@12.18.0 install
-   corepack pnpm@12.18.0 run ci
+   npm ci
+   npm run ci
    ```
 2. Write the tests first, or alongside the code:
    - behaviour tests, including negative cases
    - security cases where relevant
    - type-level tests for public types (`test/*.test-d.ts`)
-3. Implement in small, single-purpose modules, reusing contracts, core and devkit instead of duplicating.
+3. Implement in small, single-purpose modules, reusing the framework's `contracts`, `core` and `devkit` layers instead of duplicating.
 4. Document the *why* in TSDoc and comments. Update the README, the hub spec and the docs site when behaviour visible to users changes.
-5. For a published package, add a changeset: `corepack pnpm@12.18.0 changeset`.
+5. If a new dependency needs an install script, approve it explicitly (`npm approve-scripts <pkg>`) and say why in the PR. Never weaken the synced `.npmrc`.
+6. For a published package, add a changeset: `npx changeset`.
 
 ## 3. Verify
 
-1. Run `corepack pnpm@12.18.0 run ci`. It must pass, with no skipped tests and no lowered thresholds.
+1. Run `npm run ci`. It must pass, with no skipped tests and no lowered thresholds.
 2. Run the `strutvane-ecosystem-guardian` agent on the diff and fix its findings.
 3. Confirm you haven't edited synced files. Run this from strutvane-tooling:
    ```
-   node scripts/sync.mjs --check
+   npm run sync:check
    ```
 
 ## 4. Land it

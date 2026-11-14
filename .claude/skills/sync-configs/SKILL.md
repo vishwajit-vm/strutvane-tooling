@@ -15,14 +15,14 @@ description: Change a shared Strutvane config or CI workflow safely, sync it to 
      ```bash
      gh api repos/<owner>/<action>/git/tags/<sha>
      ```
-2. **Run `corepack pnpm@12.18.0 run ci`** here, for lint and the sync tests.
-3. **Run `corepack pnpm@12.18.0 run sync:dry`** and list the repos and files that will change.
-4. **Run `corepack pnpm@12.18.0 run sync`.**
+2. **Run `npm run ci`** here, for lint and the tests (sync, manifest, workflows, release scripts).
+3. **Run `npm run sync:dry`** and list the repos and files that will change. A `!` line is a retired file that repo must delete by hand.
+4. **Run `npm run sync`** (or `node scripts/sync.mjs --repo <name>` for one repo at a time, when other people are working in the others).
 5. **In each affected `../<repo>` that has a package.json,** run:
    ```bash
-   corepack pnpm@12.18.0 install
-   corepack pnpm@12.18.0 run ci
+   npm ci
+   npm run ci
    ```
    Report the exact results. If one fails, fix the canonical file. Never patch the copy.
 6. **Commit in each repo** with the message `chore: sync tooling configs`. Ask the user before pushing.
-7. **Confirm** that `corepack pnpm@12.18.0 run sync:check` reports "All repos are in sync."
+7. **Confirm** that `npm run sync:check` reports "All repos are in sync."

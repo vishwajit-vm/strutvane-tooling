@@ -10,10 +10,11 @@ Check the following:
 
 1. **CI and release workflows:**
    - Every action is pinned to a 40-character commit SHA with a tag comment.
-   - Permissions are least-privilege. Only `release.yml` may have `id-token: write` and `contents: write`.
+   - Permissions are least-privilege. Only `release.yml` (npm OIDC) and `scorecard.yml` may have `id-token: write`; no workflow needs `contents: write`.
    - `persist-credentials: false` is set where possible.
    - Every job has a timeout.
-   - `pnpm install --frozen-lockfile` is used.
+   - npm only: `npm install --global npm@11.19.0`, `npm ci`, `npm audit signatures`, `npm run ci`; never pnpm or `npm install` (the lockfile must win).
+   - `.npmrc` guards (`strict-allow-scripts`, `min-release-age`, `allow-git=none`, `engine-strict`) are never weakened without a stated reason.
 2. **TypeScript, Biome and Vitest:** look for any flag that weakens strictness or coverage, and require a stated reason for each. Look for any option that could behave differently on Windows.
 3. **sync.mjs:**
    - Path handling must be safe: no traversal, no deletes.
