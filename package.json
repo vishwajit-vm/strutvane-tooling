@@ -5,9 +5,15 @@
   "description": "Canonical configs, CI workflows and the config-sync script shared by every Strutvane package repo.",
   "license": "MIT",
   "type": "module",
-  "packageManager": "pnpm@12.18.0",
   "engines": {
     "node": ">=24"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "npm",
+      "version": ">=11.19.0",
+      "onFail": "error"
+    }
   },
   "scripts": {
     "sync": "node scripts/sync.mjs",
@@ -19,6 +25,7 @@
     "ci": "biome check . && node --test \"scripts/*.test.mjs\""
   },
   "devDependencies": {
-    "@biomejs/biome": "2.6.7"
+    "@biomejs/biome": "2.6.7",
+    "yaml": "2.9.1"
   }
 }

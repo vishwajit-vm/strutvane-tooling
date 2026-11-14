@@ -1,10 +1,12 @@
 # Managed by strutvane-tooling (canonical/.github/workflows/ci.yml). Do not edit in package repos:
-# change it in strutvane-tooling and run `pnpm sync` there.
+# change it in strutvane-tooling and run `npm run sync` there.
 #
-# Runs the repo's full quality gate (`pnpm run ci` = lint + typecheck + test + build) on every
+# Runs the repo's full quality gate (`npm run ci` = lint + typecheck + test + build) on every
 # push to main and every pull request, on Linux, Windows and macOS, on Node 24 and 26 (both LTS).
-# Actions are pinned to full commit SHAs (tag in the trailing comment) to prevent supply-chain
-# attacks through moved tags; Dependabot keeps them up to date.
+# npm only (hub docs/18 §7). Dependencies always come from the npm registry
+# exactly as pinned in package-lock.json; CI never sees a sibling checkout (dry run §5.2).
+# Actions are pinned to full commit SHAs (tag in the trailing comment; SHAs checked 2026-11-15) to
+# prevent supply-chain attacks through moved tags; Dependabot keeps them up to date.
 name: CI
 
 on:
@@ -36,20 +38,25 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Set up pnpm (version from package.json "packageManager")
-        uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-
-      - name: Set up Node ${{ matrix.node }}
+      - name: Set up Node ${{ matrix.node }} (npm cache keyed on package-lock.json)
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
-          cache: pnpm
+          cache: npm
 
-      - name: No local-only dependencies (link:/file:/workspace:)
+      # The .npmrc guards (strict-allow-scripts, min-release-age, allow-git) need npm >= 11.19, and
+      # an older npm ignores them silently. Pin it so the gate never depends on the bundled npm.
+      - name: Use npm 11.19.0
+        run: npm install --global npm@11.19.0
+
+      - name: No local-only or non-registry dependencies
         run: node .github/scripts/check-deps.mjs
 
-      - name: Install (lockfile must be up to date)
-        run: pnpm install --frozen-lockfile
+      - name: Install (exactly the lockfile; install scripts only from the allowlist)
+        run: npm ci
+
+      - name: Verify registry signatures and provenance of installed packages
+        run: npm audit signatures
 
       - name: Quality gate (lint, typecheck, test, build)
-        run: pnpm run ci
+        run: npm run ci
