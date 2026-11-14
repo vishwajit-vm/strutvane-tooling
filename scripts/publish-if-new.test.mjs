@@ -1,7 +1,12 @@
 // Tests for canonical/.github/scripts/publish-if-new.mjs (node --test).
 import assert from 'node:assert/strict'
 import { describe, test } from 'node:test'
-import { compareStable, decide, distTagFor } from '../canonical/.github/scripts/publish-if-new.mjs'
+import {
+  compareStable,
+  decide,
+  distTagFor,
+  stagedVersions,
+} from '../canonical/.github/scripts/publish-if-new.mjs'
 
 describe('distTagFor', () => {
   test('stable versions go to latest, pre-releases to their id', () => {
@@ -36,26 +41,72 @@ describe('decide', () => {
       },
     )
   })
-  test('publishes new pre-releases to their tag, even when only placeholders exist', () => {
+  test('stages new pre-releases to their tag, even when only placeholders exist', () => {
     assert.deepEqual(
       decide({
         version: '0.1.0-next.0',
         published: ['0.0.0-reserved.0'],
         latest: '0.0.0-reserved.0',
       }),
-      { action: 'publish', tag: 'next' },
+      { action: 'stage', tag: 'next' },
     )
   })
-  test('publishes a first stable release to latest', () => {
+  test('stages a first stable release to latest', () => {
     assert.deepEqual(decide({ version: '1.0.0', published: [], latest: undefined }), {
-      action: 'publish',
+      action: 'stage',
       tag: 'latest',
     })
+  })
+  test('skips a version that is already staged and waiting for approval', () => {
+    assert.deepEqual(
+      decide({
+        version: '0.1.0-next.1',
+        published: ['0.1.0-next.0'],
+        latest: undefined,
+        staged: ['0.1.0-next.1'],
+      }),
+      { action: 'skip', reason: '0.1.0-next.1 is already staged and waiting for approval' },
+    )
+  })
+  test('a different staged version does not block staging this one', () => {
+    assert.deepEqual(
+      decide({
+        version: '0.1.0-next.2',
+        published: [],
+        latest: undefined,
+        staged: ['0.1.0-next.1'],
+      }),
+      { action: 'stage', tag: 'next' },
+    )
   })
   test('refuses to move latest backwards', () => {
     assert.throws(
       () => decide({ version: '1.2.0', published: ['1.3.0'], latest: '1.3.0' }),
       /higher latest/,
     )
+  })
+})
+
+describe('stagedVersions', () => {
+  test('reads versions from flat and nested shapes, filtered by package name', () => {
+    const data = {
+      staged: [
+        { name: '@strutvane/core', version: '0.1.0-next.0', id: 'a' },
+        { name: '@strutvane/other', version: '9.9.9', id: 'b' },
+        { package: '@strutvane/core', details: { version: '0.1.0-next.1' } },
+      ],
+    }
+    assert.deepEqual(stagedVersions(data, '@strutvane/core').sort(), [
+      '0.1.0-next.0',
+      '0.1.0-next.1',
+    ])
+  })
+  test('an array of entries without names is accepted (list already scoped to the package)', () => {
+    assert.deepEqual(stagedVersions([{ version: '1.0.0' }, { version: '1.0.0' }], 'x'), ['1.0.0'])
+  })
+  test('garbage yields nothing instead of throwing', () => {
+    for (const bad of [null, 42, 'text', [], {}, [{ version: 3 }]]) {
+      assert.deepEqual(stagedVersions(bad, 'x'), [])
+    }
   })
 })
