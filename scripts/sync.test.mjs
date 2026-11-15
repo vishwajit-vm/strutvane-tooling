@@ -307,6 +307,12 @@ describe('sync.mjs CLI on the real manifest', () => {
     const after = cli('--check')
     assert.equal(after.status, 0, after.stdout)
     assert.match(after.stdout, /All repos are in sync\./)
+    // RELEASE-READINESS.md was created once; the repo can fill it in without causing drift.
+    const readiness = join(dir, 'packages/framework/RELEASE-READINESS.md')
+    assert.match(readFileSync(readiness, 'utf8'), /\| R9 Operations \|/)
+    writeFileSync(readiness, '# filled in\n')
+    assert.equal(cli('--check').status, 0)
+    assert.equal(readFileSync(readiness, 'utf8'), '# filled in\n')
     // Profiles: the site repo and the hub got the shared memory but no library configs.
     assert.ok(existsSync(join(dir, 'packages/docs/.claude/ECOSYSTEM.md')))
     assert.ok(!existsSync(join(dir, 'packages/docs/.npmrc')))
@@ -346,5 +352,62 @@ describe('sync.mjs CLI on the real manifest', () => {
     assert.match(r.stdout, /~ framework\/\.github\/workflows\/ci\.yml \(update\)/)
     cli('--repo', 'framework')
     assert.equal(cli('--check', '--repo', 'framework').status, 0)
+  })
+})
+
+describe('create-once files (once: true)', () => {
+  /** One normal file and one create-once file, synced into `withcode`. */
+  function onceFixture() {
+    const f = fixture()
+    write(join(f.canonicalDir, 'READY.md'), '# template\n')
+    const manifest = parseManifest({
+      targets: ['withcode', 'nocode'],
+      files: [
+        { path: '.editorconfig', when: 'always' },
+        { path: 'READY.md', when: 'hasPackageJson', once: true },
+      ],
+    })
+    return { ...f, manifest }
+  }
+  const statusOf = (actions, repo, path) =>
+    actions.find((a) => a.repo === repo && a.path === path)?.status
+
+  test('"once" must be a boolean and defaults to false', () => {
+    const base = { targets: ['core'], files: [{ path: 'a', when: 'always' }] }
+    assert.equal(parseManifest(base).files[0]?.once, false)
+    assert.throws(
+      () => parseManifest({ ...base, files: [{ path: 'a', when: 'always', once: 'yes' }] }),
+      /once must be true or false/,
+    )
+  })
+
+  test('created when missing (drift until then), and respects "when"', () => {
+    const actions = planSync(onceFixture())
+    assert.equal(statusOf(actions, 'withcode', 'READY.md'), 'create')
+    assert.equal(statusOf(actions, 'nocode', 'READY.md'), 'skipped-no-package-json')
+  })
+
+  test('never compared or overwritten once the repo has it, and never drift', () => {
+    const f = onceFixture()
+    applySync(planSync(f))
+    const file = join(f.rootDir, 'withcode/READY.md')
+    writeFileSync(file, '# filled in by the repo\n| R1 | pass |\n')
+    // The canonical template changes too: the repo's copy must still be left alone.
+    writeFileSync(join(f.canonicalDir, 'READY.md'), '# template v2\n')
+    const actions = planSync(f)
+    assert.equal(statusOf(actions, 'withcode', 'READY.md'), 'kept')
+    assert.ok(!DRIFT.includes('kept'))
+    assert.equal(applySync(actions), 0)
+    assert.equal(readFileSync(file, 'utf8'), '# filled in by the repo\n| R1 | pass |\n')
+  })
+
+  test('the report stays quiet about kept files', () => {
+    const f = onceFixture()
+    applySync(planSync(f))
+    writeFileSync(join(f.rootDir, 'withcode/READY.md'), 'edited\n')
+    assert.equal(
+      formatReport(planSync(f), { check: true, dryRun: false }),
+      'All repos are in sync.\n',
+    )
   })
 })

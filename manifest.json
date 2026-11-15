@@ -1,5 +1,5 @@
 {
-  "$comment": "Which canonical files are synced into which repos. A target's profile decides which files it gets: 'library' = TypeScript package repo, 'site' = docs site, 'meta' = hub and tooling. 'when: hasPackageJson' files only go to repos that already contain a package.json. Files without 'profiles' go to every profile. 'retired' lists files that are no longer canonical: sync never deletes them, but --check reports any copy that is still there. A target folder that does not exist (not cloned, or not created yet) is skipped. contracts, core, cli and devkit were removed in v2: the framework absorbs them (hub docs/18 §3.2) and their repos will be archived.",
+  "$comment": "Which canonical files are synced into which repos. A target's profile decides which files it gets: 'library' = TypeScript package repo, 'site' = docs site, 'meta' = hub and tooling. 'when: hasPackageJson' files only go to repos that already contain a package.json. Files without 'profiles' go to every profile. 'once: true' files are create-once: written only when the repo has no copy, never compared or overwritten afterwards (the repo owns them). 'retired' lists files that are no longer canonical: sync never deletes them, but --check reports any copy that is still there. A target folder that does not exist (not cloned, or not created yet) is skipped. contracts, core, cli and devkit were removed in v2: the framework absorbs them (hub docs/18 §3.2) and their repos will be archived.",
   "targets": [
     {
       "name": "framework",
@@ -117,9 +117,25 @@
       "profiles": ["library"]
     },
     {
+      "path": ".github/scripts/check-code-rules.mjs",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
+      "path": ".github/scripts/check-package.mjs",
+      "when": "hasPackageJson",
+      "profiles": ["library"]
+    },
+    {
       "path": ".github/workflows/scorecard.yml",
       "when": "hasPackageJson",
       "profiles": ["library", "meta"]
+    },
+    {
+      "path": "RELEASE-READINESS.md",
+      "when": "hasPackageJson",
+      "profiles": ["library"],
+      "once": true
     }
   ],
   "retired": [

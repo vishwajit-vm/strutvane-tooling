@@ -37,11 +37,16 @@ import { fileURLToPath } from 'node:url'
  * - `meta`: the hub/blueprint repo and the tooling repo itself.
  * @typedef {'library' | 'site' | 'meta'} Profile
  */
-/** @typedef {{ path: string, when: When, profiles: Profile[] }} ManifestFile */
+/**
+ * A canonical file. `once: true` means create-once: sync writes it only when the repo has no copy,
+ * and never compares or overwrites it afterwards, because the repo owns its content from then on
+ * (e.g. RELEASE-READINESS.md, which each repo fills in).
+ * @typedef {{ path: string, when: When, profiles: Profile[], once: boolean }} ManifestFile
+ */
 /** @typedef {{ path: string, reason: string, profiles: Profile[] }} RetiredFile */
 /** @typedef {{ name: string, dir: string, profile: Profile, note?: string }} Target */
 /** @typedef {{ targets: Target[], files: ManifestFile[], retired: RetiredFile[] }} Manifest */
-/** @typedef {'create' | 'update' | 'unchanged' | 'retired' | 'skipped-no-package-json' | 'skipped-missing-repo' | 'skipped-profile'} Status */
+/** @typedef {'create' | 'update' | 'unchanged' | 'kept' | 'retired' | 'skipped-no-package-json' | 'skipped-missing-repo' | 'skipped-profile'} Status */
 /** @typedef {{ repo: string, path: string, status: Status, target: string, content?: string, reason?: string }} Action */
 
 /** Statuses that mean a repo differs from what tooling wants (`--check` fails on them). */
@@ -87,6 +92,7 @@ export function parseManifest(value) {
       path: parsePath(file.path, where),
       when: /** @type {When} */ (file.when),
       profiles: parseProfiles(file.profiles, where),
+      once: parseOnce(file.once, where),
     }
   })
 
@@ -108,6 +114,18 @@ export function parseManifest(value) {
   const clash = retired.find((r) => active.has(r.path))
   if (clash) throw new Error(`manifest: "${clash.path}" is listed in both "files" and "retired"`)
   return { targets, files, retired }
+}
+
+/**
+ * The optional `once` flag: a boolean, false when omitted.
+ * @param {unknown} value
+ * @param {string} where
+ * @returns {boolean}
+ */
+function parseOnce(value, where) {
+  if (value === undefined) return false
+  if (typeof value !== 'boolean') throw new Error(`manifest: ${where}.once must be true or false`)
+  return value
 }
 
 /**
@@ -220,6 +238,9 @@ export function planSync({ canonicalDir, rootDir, manifest, repos }) {
       const content = normalize(readFileSync(source, 'utf8'))
       if (!existsSync(target)) {
         actions.push({ repo, path: file.path, status: 'create', target, content })
+      } else if (file.once) {
+        // Create-once: the repo's copy is its own now, whatever it contains.
+        actions.push({ repo, path: file.path, status: 'kept', target })
       } else {
         const current = normalize(readFileSync(target, 'utf8'))
         actions.push({

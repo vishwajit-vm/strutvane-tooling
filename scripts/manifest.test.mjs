@@ -54,7 +54,45 @@ describe('manifest.json', () => {
 
   test('.npmrc goes to library repos that have a package.json', () => {
     const npmrc = manifest.files.find((f) => f.path === '.npmrc')
-    assert.deepEqual(npmrc, { path: '.npmrc', when: 'hasPackageJson', profiles: ['library'] })
+    assert.deepEqual(npmrc, {
+      path: '.npmrc',
+      when: 'hasPackageJson',
+      profiles: ['library'],
+      once: false,
+    })
+  })
+
+  test('RELEASE-READINESS.md is create-once, one row per gate R1–R9 (hub docs/19)', () => {
+    const entry = manifest.files.find((f) => f.path === 'RELEASE-READINESS.md')
+    assert.deepEqual(entry, {
+      path: 'RELEASE-READINESS.md',
+      when: 'hasPackageJson',
+      profiles: ['library'],
+      once: true,
+    })
+    assert.deepEqual(
+      manifest.files.filter((f) => f.once).map((f) => f.path),
+      ['RELEASE-READINESS.md'],
+      'only the readiness file is create-once; every config must stay in sync',
+    )
+    const text = readFileSync(join(CANONICAL, 'RELEASE-READINESS.md'), 'utf8')
+    const rows = text.split(/\r?\n/).filter((l) => /^\| R\d /.test(l))
+    assert.deepEqual(
+      rows.map((r) => r.slice(2, 4)),
+      ['R1', 'R2', 'R3', 'R4', 'R5', 'R6', 'R7', 'R8', 'R9'],
+    )
+    assert.match(text, /\| Gate \| .* \| Status \| Evidence \| Date \|/)
+  })
+
+  test('the R1 and R5 check scripts are synced to library repos', () => {
+    for (const path of [
+      '.github/scripts/check-code-rules.mjs',
+      '.github/scripts/check-package.mjs',
+    ]) {
+      const f = manifest.files.find((x) => x.path === path)
+      assert.deepEqual(f?.profiles, ['library'], path)
+      assert.equal(f?.once, false, path)
+    }
   })
 })
 
