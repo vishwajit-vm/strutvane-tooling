@@ -4,7 +4,10 @@
 # Release flow (ADR-0016, "version on main, CI publishes what's new"; ADR-0018, staged publishing):
 #   1. Contributors add changesets. A maintainer runs `npx changeset version` and commits
 #      `chore(release): <name>@<version>` on main.
-#   2. On every push to main, this workflow runs the full quality gate, then STAGES the package's
+#   2. On every push to main, this workflow first runs EVERY production-readiness gate in ci.yml
+#      (hub docs/19: the OS x Node matrix, the repeat run, audit and secrets scan, package-check)
+#      as a called workflow; the release job `needs` it, so a single red gate stages nothing.
+#      Then it runs the full quality gate again on the build it is about to stage, and STAGES the package's
 #      version ONLY if it's neither on npm nor already staged (idempotent). Every repo publishes
 #      exactly one package, from its root. The dist-tag comes from the version: x.y.z → latest,
 #      x.y.z-next.N → next, x.y.z-canary.N → canary.
@@ -37,7 +40,16 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Every gate in ci.yml, exactly as on pull requests. Same condition as the release job, so a repo
+  # that has not enabled releases doesn't run CI twice on each push.
+  ci:
+    if: github.repository_owner == 'vishwajit-vm' && vars.RELEASE_ENABLED == 'true'
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
   release:
+    needs: ci
     if: github.repository_owner == 'vishwajit-vm' && vars.RELEASE_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -71,6 +83,7 @@ jobs:
       - name: Verify registry signatures and provenance of installed packages
         run: npm audit signatures
 
+      # Gated again on this runner: the tarball staged below is built by this exact run.
       - name: Quality gate (never publish a broken build)
         run: npm run ci
 

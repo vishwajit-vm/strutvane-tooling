@@ -21,6 +21,10 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Same as package repos (hub docs/19 R2): a forgotten promise rejection fails the run.
+env:
+  NODE_OPTIONS: --unhandled-rejections=strict
+
 jobs:
   verify:
     name: verify (${{ matrix.os }}, node ${{ matrix.node }})

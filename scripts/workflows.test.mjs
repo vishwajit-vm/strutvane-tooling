@@ -60,7 +60,10 @@ describe('every workflow', () => {
     for (const { rel, text } of workflows) {
       const lines = usesLines(text)
       assert.ok(lines.length > 0, `${rel} uses actions`)
-      for (const line of lines) {
+      // A reusable workflow from this same repo (`./.github/workflows/x.yml`) runs the commit
+      // being built, so it needs no pin.
+      const remote = lines.filter((l) => !/^uses: \.\/\.github\/workflows\/[\w.-]+\.ya?ml$/.test(l))
+      for (const line of remote) {
         assert.match(
           line,
           /^uses: [\w.-]+\/[\w.-]+(\/[\w./-]+)?@[0-9a-f]{40} # v\d+(\.\d+){0,2}$/,
@@ -99,9 +102,15 @@ describe('every workflow', () => {
     }
   })
 
-  test('every job has a timeout, and checkouts never keep the token', () => {
+  test('every job has a timeout (reusable-workflow calls excepted); checkouts drop the token', () => {
     for (const { rel, doc } of workflows) {
       for (const [name, job] of Object.entries(doc.jobs)) {
+        // A job that calls a reusable workflow can't set timeout-minutes; the called jobs do.
+        if (job.uses) {
+          assert.equal(job['timeout-minutes'], undefined, `${rel} job ${name}`)
+          assert.match(job.uses, /^\.\/\.github\/workflows\//, `${rel} job ${name}: local only`)
+          continue
+        }
         assert.ok(Number.isInteger(job['timeout-minutes']), `${rel} job ${name}: timeout`)
         for (const step of job.steps ?? []) {
           if (String(step.uses ?? '').startsWith('actions/checkout@')) {
@@ -127,7 +136,8 @@ describe('CI workflows (canonical and this repo)', () => {
         String(s.uses).startsWith('actions/setup-node@'),
       )
       assert.equal(setup?.with?.cache, 'npm')
-      const commands = runs(doc)
+      assert.equal(doc.env?.NODE_OPTIONS, '--unhandled-rejections=strict', 'R2: strict rejections')
+      const commands = doc.jobs.verify.steps.map((s) => s.run).filter(Boolean)
       const order = [
         'npm install --global npm@11.19.0',
         /check-deps\.mjs$/,
@@ -148,6 +158,70 @@ describe('CI workflows (canonical and this repo)', () => {
   }
 })
 
+describe('canonical CI: the production-readiness gates (hub docs/19)', () => {
+  const { doc } = byPath('canonical/.github/workflows/ci.yml')
+  /** The `run:` commands of one job. */
+  const jobRuns = (name) => (doc.jobs[name]?.steps ?? []).map((s) => s.run).filter(Boolean)
+  /** The step of a job that uses an action whose name starts with `prefix`. */
+  const stepUsing = (name, prefix) =>
+    (doc.jobs[name]?.steps ?? []).find((s) => String(s.uses ?? '').startsWith(prefix))
+
+  test('can be called by release.yml, and only pull requests cancel superseded runs', () => {
+    assert.ok(Object.hasOwn(doc.on, 'workflow_call'))
+    assert.match(
+      String(doc.concurrency['cancel-in-progress']),
+      /^\$\{\{ github\.event_name == 'pull_request' \}\}$/,
+    )
+  })
+
+  test('R1: the code rules run in the matrix job', () => {
+    assert.ok(jobRuns('verify').includes('node .github/scripts/check-code-rules.mjs'))
+  })
+
+  test('R2: a repeat job runs the whole test suite three times; all must pass', () => {
+    const loop = jobRuns('repeat').find((c) => /for run in 1 2 3/.test(c))
+    assert.ok(loop, 'a 3-run loop')
+    assert.match(loop, /\bnpm test\b/)
+    assert.doesNotMatch(loop, /\|\| *true|continue-on-error/)
+    assert.equal(doc.jobs.repeat['continue-on-error'], undefined)
+  })
+
+  test('R3: production audit at high, and a TruffleHog scan pinned by action SHA and image digest', () => {
+    assert.ok(jobRuns('security').includes('npm audit --omit=dev --audit-level=high'))
+    const scan = stepUsing('security', 'trufflesecurity/trufflehog@')
+    assert.ok(scan, 'trufflehog step')
+    assert.match(scan.with.version, /^\d+\.\d+\.\d+@sha256:[0-9a-f]{64}$/)
+    const checkout = stepUsing('security', 'actions/checkout@')
+    assert.equal(checkout?.with?.['fetch-depth'], 0, 'full history for the secrets scan')
+  })
+
+  test('R5: package-check builds, checks contents, packs, then runs exact-pinned publint and attw', () => {
+    const commands = jobRuns('package-check')
+    const find = (re) => commands.findIndex((c) => re.test(c))
+    const order = [
+      /^npm ci$/,
+      /^npm run build$/,
+      /check-package\.mjs$/,
+      /npm pack --ignore-scripts --pack-destination/,
+      /--package=publint@\d+\.\d+\.\d+ -- publint run .*\.tgz --strict$/,
+      /--package=@arethetypeswrong\/cli@\d+\.\d+\.\d+ -- attw .*\.tgz --profile esm-only$/,
+    ]
+    let at = -1
+    for (const re of order) {
+      const index = find(re)
+      assert.ok(index > at, `package-check: ${re} after the previous step`)
+      at = index
+    }
+  })
+
+  test('no gate is allowed to fail softly', () => {
+    for (const [name, job] of Object.entries(doc.jobs)) {
+      assert.equal(job['continue-on-error'], undefined, name)
+      for (const step of job.steps ?? []) assert.equal(step['continue-on-error'], undefined, name)
+    }
+  })
+})
+
 describe('canonical release workflow', () => {
   const { doc } = byPath('canonical/.github/workflows/release.yml')
   const job = doc.jobs.release
@@ -155,6 +229,13 @@ describe('canonical release workflow', () => {
   test('runs only in the org and only once RELEASE_ENABLED is set', () => {
     assert.match(job.if, /github\.repository_owner == 'vishwajit-vm'/)
     assert.match(job.if, /vars\.RELEASE_ENABLED == 'true'/)
+    assert.equal(doc.jobs.ci.if, job.if, 'the CI call has the same condition')
+  })
+
+  test('stages nothing unless every CI gate is green: it calls ci.yml and needs it', () => {
+    assert.equal(doc.jobs.ci.uses, './.github/workflows/ci.yml')
+    assert.deepEqual(doc.jobs.ci.permissions, { contents: 'read' })
+    assert.ok([job.needs].flat().includes('ci'))
   })
 
   test('never cancels a release half-way', () => {
