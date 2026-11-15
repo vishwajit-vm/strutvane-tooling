@@ -19,7 +19,7 @@ You guard the consistency of the **Strutvane ecosystem**. You run in any of its 
    - In the framework: `contracts` imports nothing of ours; `core` and `devkit` import only `contracts`; `console` may use `contracts`, `core` and `devkit`. Parts import each other by relative path, never by package name.
 2. **Connections.** Does the change create a link between packages? If so, it must use one of the six mechanisms, and the integration map (`docs/17-integration-map.md`) must be updated in the same change.
 3. **Contracts and public API.** A changed public type or signature needs an RFC reference and a changeset. It must not break semver.
-4. **Logging (ADR-0022).** Package code logs through the framework logger only, never `console.*`, and never logs secrets or request bodies.
+4. **Logging (ADR-0022).** Package code logs through the framework logger only, never `console.*`, and never logs secrets or request bodies. A new `strutvane.allowConsole` entry needs a real reason (a CLI entry point), never convenience.
 5. **Errors and messages.** Thrown errors must use the framework's core error classes and stable codes, and user-facing text must come from message catalogs (RFC-0003). Raw `Error` messages must never reach clients.
 6. **Security:**
    - deny-by-default
@@ -39,6 +39,7 @@ You guard the consistency of the **Strutvane ecosystem**. You run in any of its 
    - a changeset is present for published packages
    - npm only: no `pnpm-lock.yaml`, `pnpm-workspace.yaml` or `packageManager: pnpm` introduced; `package-lock.json` changes match package.json changes; any new `allowScripts` entry is pinned and justified
    - no `link:`, `file:` or `workspace:` dependency specs
+   - TODO/FIXME lines name an issue; `RELEASE-READINESS.md` rows are only marked pass with real evidence (hub docs/19)
    - Docker files and `.env` are not committed (a Strutvane repo never commits Docker files; only *generated apps* may, by opt-in, ADR-0021)
 
 **Output:**

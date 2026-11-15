@@ -12,7 +12,8 @@ Check the following:
    - Every action is pinned to a 40-character commit SHA with a tag comment.
    - Permissions are least-privilege. Only `release.yml` (npm OIDC) and `scorecard.yml` may have `id-token: write`; no workflow needs `contents: write`.
    - `persist-credentials: false` is set where possible.
-   - Every job has a timeout.
+   - Every job has a timeout (a job that only `uses:` a reusable workflow can't have one; the called jobs do).
+   - No production-readiness gate (hub docs/19) is weakened: no `continue-on-error`, no dropped matrix entry, no unpinned tool version.
    - npm only: `npm install --global npm@11.19.0`, `npm ci`, `npm audit signatures`, `npm run ci`; never pnpm or `npm install` (the lockfile must win).
    - `.npmrc` guards (`strict-allow-scripts`, `min-release-age`, `allow-git=none`, `engine-strict`) are never weakened without a stated reason.
 2. **TypeScript, Biome and Vitest:** look for any flag that weakens strictness or coverage, and require a stated reason for each. Look for any option that could behave differently on Windows.

@@ -55,6 +55,7 @@ Every generated line is owned, overridable code.
 | How packages connect (the only allowed connections) | `docs/17-integration-map.md` | [link](https://github.com/vishwajit-vm/strutvane/blob/main/docs/17-integration-map.md) |
 | Architecture decision records | `docs/adr/` | [link](https://github.com/vishwajit-vm/strutvane/tree/main/docs/adr) |
 | RFCs (public API / contract changes) | `docs/rfcs/` | [link](https://github.com/vishwajit-vm/strutvane/tree/main/docs/rfcs) |
+| **Production readiness gates R1–R9 (binding)** | `docs/19-production-readiness.md` | [link](https://github.com/vishwajit-vm/strutvane/blob/main/docs/19-production-readiness.md) |
 | Roadmap and current phase | `docs/14-roadmap.md`, `docs/18-v2-blueprint.md` §10 | [link](https://github.com/vishwajit-vm/strutvane/blob/main/docs/14-roadmap.md) |
 | Security model | `docs/12-security-model.md` | [link](https://github.com/vishwajit-vm/strutvane/blob/main/docs/12-security-model.md) |
 
@@ -67,7 +68,7 @@ Every generated line is owned, overridable code.
    - **Add-ons** (auth, ui, designs, log-viewer, files, …) depend only on the **published** `@strutvane/framework`, as a **peer + dev** dependency, so an app has exactly one copy (container tokens and `instanceof` rely on that). They import it through its subpaths. **Add-ons never import each other.** How design packages attach to `@strutvane/ui` is not settled yet *(unverified)*.
 2. **The only allowed connections** between packages are the six in the integration map: contracts (types, from `@strutvane/framework/contracts`), container tokens, hooks, domain events, installer `enhances`, and HTTP + manifest. A new connection is added to the map in the same PR.
 3. **Every package works alone and installs itself completely** (config, `.env` + `.env.example`, migrations, routes, screens) with `node strut install:<name>`, declared in its package.json `strutvane` block, never by hard-coded package names (blueprint §3.3). Install order never changes the result.
-4. **Logging lives in the framework** (ADR-0022): Laravel-style channels from `.env` (`LOG_CHANNEL`, `LOG_STACK`, `LOG_LEVEL`, …), files in `storage/logs/`, `Log.channel()`, `Log.withContext()`. Redaction is always on. Package code logs only through the framework's logger, never `console.*`, and never logs secrets or request bodies by default. The UI is the separate `@strutvane/log-viewer`.
+4. **Logging lives in the framework** (ADR-0022): Laravel-style channels from `.env` (`LOG_CHANNEL`, `LOG_STACK`, `LOG_LEVEL`, …), files in `storage/logs/`, `Log.channel()`, `Log.withContext()`. Redaction is always on. Package code logs only through the framework's logger, never `console.*` (CI fails on `console.` in `src/`; a file that must print, like a CLI entry point, is listed by exact path in package.json `strutvane.allowConsole`), and never logs secrets or request bodies by default. The UI is the separate `@strutvane/log-viewer`.
 5. **One error model:** RFC 9457 `Problem` with a stable `code` and structured `issues`. Messages come from catalogs, never hard-coded (RFC-0003).
 6. **Security by default:**
    - deny-by-default authorization
@@ -102,7 +103,8 @@ Every generated line is owned, overridable code.
   - The synced `.npmrc` sets `strict-allow-scripts`, `min-release-age=1` (our own `@strutvane/*` exempt), `allow-git=none` and `engine-strict`. Approve a dependency's install script with `npm approve-scripts <pkg>`, which records a pinned entry in package.json `allowScripts`.
   - Commit `package-lock.json`. CI rejects lockfile entries that are not resolved from the npm registry.
 - **Branches:** every repo uses `main`. Short-lived feature branches are fine, but they must be merged back into `main` once tests pass. Never leave work stranded on a side branch. `main` is protected against force-push and deletion. (Proposed ADR-0020 adds permanent `0.N.x` line branches; not in force until accepted.)
-- **Before committing:** `npm ci`, then the repo's quality gate `npm run ci` (lint → typecheck → tests + coverage → build). It must pass.
+- **Before committing:** `npm ci`, then the repo's quality gate `npm run ci` (lint → typecheck → tests + coverage → build). It must pass. A TODO or FIXME must name an issue (`TODO(#12)` or an issues URL), or CI fails.
+- **Production readiness (hub `docs/19`, binding):** a version reaches npm `latest` only when gates R1–R9 all pass with evidence. The synced CI enforces the machine-checkable parts (matrix with `--unhandled-rejections=strict`, tests 3× in a row, `npm audit --omit=dev --audit-level=high`, a TruffleHog secrets scan, tarball contents, publint, attw), and `release.yml` stages nothing unless all of CI is green. Each repo records status, evidence link and date per gate in its own `RELEASE-READINESS.md` (created once by sync, then owned by the repo). Nobody marks a gate passed on an agent's word alone.
 - **Changesets:** any change to a published package adds one (`npx changeset`).
 - **Commits:** conventional commits (`feat:`, `fix:`, `docs:`, `chore:` …). Sign off with `git commit -s` (DCO).
 - **Cross-repo dependencies:** committed code depends only on **published** versions; `link:`, `file:` and `workspace:` specs are refused by CI. CI never sees a sibling checkout.

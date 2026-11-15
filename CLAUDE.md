@@ -29,6 +29,6 @@ Hub/blueprint: `../../docs/` (decisions D1–D24 in `00-executive-summary.md` wi
 ## Map
 
 - `canonical/`: files synced into every repo, filtered by repo profile (`library` / `site` / `meta`, see `manifest.json`), including the shared ecosystem memory `canonical/.claude/ECOSYSTEM.md`, the `strutvane-ecosystem-guardian` agent and the `strutvane-contribute` skill
-- `scripts/sync.mjs` + `sync.test.mjs`: the sync engine and its tests; `manifest.test.mjs` (the real manifest and canonical tree), `workflows.test.mjs` (YAML, npm only, pinned actions, permissions), `check-deps.test.mjs`, `publish-if-new.test.mjs`
+- `scripts/sync.mjs` + `sync.test.mjs`: the sync engine and its tests; `manifest.test.mjs` (the real manifest and canonical tree), `workflows.test.mjs` (YAML, npm only, pinned actions, permissions), `check-deps.test.mjs`, `check-code-rules.test.mjs`, `check-package.test.mjs`, `publish-if-new.test.mjs`
 - `.claude/skills/sync-configs/`: playbook for changing a shared config
 - `.claude/agents/config-change-reviewer.md`: reviews config/CI changes

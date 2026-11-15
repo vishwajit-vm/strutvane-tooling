@@ -35,6 +35,8 @@ description: The standard workflow for making any change in any Strutvane repo â
 ## 3. Verify
 
 1. Run `npm run ci`. It must pass, with no skipped tests and no lowered thresholds.
+   - No `console.` in `src/` (use the framework logger), and every TODO/FIXME names an issue: `node .github/scripts/check-code-rules.mjs`.
+   - If the change affects a production-readiness gate (hub `docs/19`, R1â€“R9), update that row of `RELEASE-READINESS.md` with real evidence (a CI run, report or test file) and the date.
 2. Run the `strutvane-ecosystem-guardian` agent on the diff and fix its findings.
 3. Confirm you haven't edited synced files. Run this from strutvane-tooling:
    ```

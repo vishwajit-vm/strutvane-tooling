@@ -40,14 +40,17 @@ Every target repo has a **profile**, so each repo only gets what makes sense for
 | `tsconfig.base.json` | Strictest practical TypeScript settings. Each flag is commented with the bug it prevents. Repos `extends` it. | library, once it has a `package.json` |
 | `biome.base.json` | Formatting and lint rules (Biome). Repos `extends` it from their own `biome.json`. | library, once it has a `package.json` |
 | `vitest.shared.ts`, `vitest.perf.config.ts` | Test defaults: no silent passes, type-level tests on, coverage thresholds (90/90/85/90); performance budgets kept out of the deterministic gate. | library, once it has a `package.json` |
-| `.github/workflows/ci.yml` | Quality gate on Linux, Windows and macOS × Node 24 and 26: npm 11.19.0, `check-deps`, `npm ci`, `npm audit signatures`, `npm run ci`. Actions pinned to commit SHAs. | library, once it has a `package.json` |
-| `.github/workflows/release.yml` | On every push to `main`: the same gate, then **stages** the new version on npm through trusted publishing (OIDC, no tokens) with provenance. A maintainer approves each staged version on npmjs.com with 2FA ([ADR-0016](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0016-release-flow-version-on-main.md), [ADR-0018](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0018-staged-npm-publishing.md)). Gated behind the repo variable `RELEASE_ENABLED=true`. | library, once it has a `package.json` |
+| `.github/workflows/ci.yml` | The machine-checked **production-readiness gates** ([hub docs/19](https://github.com/vishwajit-vm/strutvane/blob/main/docs/19-production-readiness.md)): `verify` (R1/R2: Linux, Windows and macOS × Node 24 and 26, npm 11.19.0, `check-deps`, `check-code-rules`, `npm ci`, `npm audit signatures`, `npm run ci`), `repeat` (R2: tests 3× in a row), `security` (R3: `npm audit --omit=dev --audit-level=high`, TruffleHog secrets scan) and `package-check` (R5: tarball contents, publint, attw). Every job runs with `NODE_OPTIONS=--unhandled-rejections=strict`. Also callable (`workflow_call`). | library, once it has a `package.json` |
+| `.github/workflows/release.yml` | On every push to `main`: calls `ci.yml` and `needs` it, so **nothing is staged unless every gate is green**; then gates the build again and **stages** the new version on npm through trusted publishing (OIDC, no tokens) with provenance. A maintainer approves each staged version on npmjs.com with 2FA ([ADR-0016](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0016-release-flow-version-on-main.md), [ADR-0018](https://github.com/vishwajit-vm/strutvane/blob/main/docs/adr/0018-staged-npm-publishing.md)). Gated behind the repo variable `RELEASE_ENABLED=true`. | library, once it has a `package.json` |
 | `.github/workflows/scorecard.yml` | Weekly OpenSSF Scorecard supply-chain check. | library and meta, once they have a `package.json` |
 | `.github/scripts/publish-if-new.mjs` | Stages the repo's one package (from the root) if its version is neither published nor staged. A 409 "already exists" is a skip only when the published tarball's integrity matches this build; for a staged version it prints the integrity the approver must see. Fails closed if the repo declares workspaces. | library, once it has a `package.json` |
+| `.github/scripts/check-code-rules.mjs` | R1: fails on `console.` in `src/` (exact-path exceptions in package.json `strutvane.allowConsole`, which must exist and still use the console) and on TODO/FIXME in `src/` or `test/` without `(#n)` or an issues URL. | library, once it has a `package.json` |
+| `.github/scripts/check-package.mjs` | R5: reads `npm pack --dry-run --json` and fails on tests, fixtures, coverage, env files, keys or `.npmrc` in the tarball, source maps with local absolute paths, a missing README/LICENSE (tarball) or CHANGELOG.md (repo), and `engines.node` below `>=24.3`. | library, once it has a `package.json` |
+| `RELEASE-READINESS.md` | **Create-once** (`once: true`): one row per gate R1–R9 with status, evidence link and date. Sync writes it only when missing; after that the repo owns it and it is never compared or overwritten. | library, once it has a `package.json` |
 | `.github/scripts/check-deps.mjs` | Fails on `link:`/`file:`/`workspace:`/path dependencies and npm `overrides`, and on any `package-lock.json` entry that is a link or not resolved from `https://registry.npmjs.org/`. | library, once it has a `package.json` |
 | `.github/dependabot.yml` | Weekly grouped updates for actions and npm deps. | any repo with a `package.json` |
 
-The list, the profiles and the **retired** files live in [`manifest.json`](manifest.json). Changing the shared memory works like any other config: edit `canonical/.claude/ECOSYSTEM.md`, run `npm run sync`, and commit in each repo.
+The list, the profiles, the create-once files and the **retired** files live in [`manifest.json`](manifest.json). Changing the shared memory works like any other config: edit `canonical/.claude/ECOSYSTEM.md`, run `npm run sync`, and commit in each repo.
 
 **Retired files.** A file that is no longer canonical (today: `.github/scripts/workspace-packages.mjs`, the pnpm-workspace reader that left with the CLI repo) is listed under `retired`. Sync never deletes it, but `--check` reports every repo that still has a copy (`!` lines) until someone deletes it there.
 
@@ -108,7 +111,7 @@ Every repo publishes exactly one package, from its root. The multi-package (pnpm
 
 ```bash
 npm ci        # npm >= 11.19 (devEngines)
-npm run ci    # Biome + the node --test suites: sync, manifest, workflows, check-deps, publish-if-new
+npm run ci    # Biome + the node --test suites: sync, manifest, workflows, check-deps, check-code-rules, check-package, publish-if-new
 ```
 
 ## License
