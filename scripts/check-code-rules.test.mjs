@@ -44,8 +44,11 @@ describe('findConsoleUses', () => {
       "console['info'](x)",
       'console . debug(x)',
       'foo(); console.log(x) // trailing comment does not hide it',
+      'const log = console.log', // passed around, not called
+      'items.forEach(console.table)',
+      'const template = `console.info("generated")`', // generated code: allowlist the file
     ].join('\n')
-    assert.deepEqual(findConsoleUses(text), [1, 2, 3, 4, 5, 6])
+    assert.deepEqual(findConsoleUses(text), [1, 2, 3, 4, 5, 6, 7, 8, 9])
   })
   test('ignores comment lines (TSDoc examples), and names that only contain "console"', () => {
     const text = [
@@ -57,6 +60,9 @@ describe('findConsoleUses', () => {
       'const myconsole = 1',
       'export const consoleLike = { log() {} }',
       "import { Console } from 'node:console'",
+      "import { stderrTransport } from './transports/console.ts'",
+      "export * from '../console/index.ts'",
+      "const hint = '- Log with the app logger, never `console.*`.'",
     ].join('\r\n')
     assert.deepEqual(findConsoleUses(text), [])
   })

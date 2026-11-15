@@ -20,7 +20,11 @@ import { join, relative, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SOURCE_EXT = /\.(?:[cm]?[jt]sx?)$/
-const CONSOLE = /\bconsole\s*(?:\.|\?\.|\[)/
+// A console method (called or passed around) or a computed access. Matching method names instead
+// of any `console.` keeps a module path such as './transports/console.ts' and prose such as
+// "never `console.*`" from failing the check.
+const CONSOLE =
+  /(?<![\w$/-])console\s*(?:\?\.|\.)\s*(?:log|info|warn|error|debug|trace|table|dir|dirxml|time|timeEnd|timeLog|assert|count|countReset|group|groupCollapsed|groupEnd|clear|profile|profileEnd)\b|(?<![\w$/-])console\s*(?:\?\.)?\s*\[/
 const TODO = /\b(?:TODO|FIXME)\b/
 const ISSUE_REF = /\(#\d+\)|https?:\/\/\S+\/issues\/\d+/
 const COMMENT_LINE = /^\s*(?:\/\/|\/\*|\*)/
