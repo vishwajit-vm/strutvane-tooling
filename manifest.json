@@ -39,6 +39,16 @@
       "name": "hub",
       "dir": "..",
       "profile": "meta"
+    },
+    {
+      "name": "design-crisp",
+      "profile": "library",
+      "note": "The default design (hub docs/18 §5.1; consistency 129)."
+    },
+    {
+      "name": "design-vivid",
+      "profile": "library",
+      "note": "The alternative design (hub docs/18 §5.1; consistency 129)."
     }
   ],
   "files": [
