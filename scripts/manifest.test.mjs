@@ -111,6 +111,26 @@ describe('manifest.json', () => {
     assert.equal(profileOf('npx'), 'library')
     assert.equal(profileOf('skeleton'), 'app-template')
   })
+
+  test('the add-on packages are library targets, so they get CI and the release workflow', () => {
+    const profileOf = (name) => manifest.targets.find((t) => t.name === name)?.profile
+    for (const name of [
+      'files',
+      'social-login',
+      'search',
+      'import-export',
+      'redis',
+      'health',
+      'charts',
+    ]) {
+      assert.equal(profileOf(name), 'library', name)
+    }
+  })
+
+  test('target names are unique', () => {
+    const names = manifest.targets.map((t) => t.name)
+    assert.deepEqual([...new Set(names)], names)
+  })
 })
 
 /** Parse JSON with `//` comments (tsconfig files): strip comments outside strings, then parse. */

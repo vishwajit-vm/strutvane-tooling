@@ -25,7 +25,7 @@ Many repos tend to end up with many slightly different TypeScript, lint and CI s
 ## What's inside
 
 Every target repo has a **profile**, so each repo only gets what makes sense for it:
-- `library`: TypeScript package repos (framework, auth, ui, create-strutvane, logs/log-viewer, files, design-crisp, design-vivid, npx, …)
+- `library`: TypeScript package repos (framework, auth, ui, create-strutvane, logs/log-viewer, files, social-login, search, import-export, redis, health, charts, design-crisp, design-vivid, npx, …)
 - `site`: the docs site
 - `meta`: the hub and this tooling repo
 - `app-template`: an application template that is never published (`strutvane-skeleton`, the app `npm create strutvane` installs). It gets the npm guards, Biome, the code rules and a CI of its own, but no release workflow, package check (publint, attw), Vitest coverage config or `RELEASE-READINESS.md`.

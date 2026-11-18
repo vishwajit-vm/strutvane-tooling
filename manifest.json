@@ -59,6 +59,36 @@
       "name": "skeleton",
       "profile": "app-template",
       "note": "The app template npm create strutvane installs (laravel/laravel). Never published."
+    },
+    {
+      "name": "social-login",
+      "profile": "library",
+      "note": "@strutvane/social-login: sign in with Google, Microsoft, GitHub and Apple (Laravel Socialite)."
+    },
+    {
+      "name": "search",
+      "profile": "library",
+      "note": "@strutvane/search: full-text search for models (Laravel Scout)."
+    },
+    {
+      "name": "import-export",
+      "profile": "library",
+      "note": "@strutvane/import-export: CSV and Excel import and export for models."
+    },
+    {
+      "name": "redis",
+      "profile": "library",
+      "note": "@strutvane/redis: Redis and Valkey cache, locks, sessions, rate limiting and queue driver."
+    },
+    {
+      "name": "health",
+      "profile": "library",
+      "note": "@strutvane/health: application health checks, alerts and a JSON endpoint."
+    },
+    {
+      "name": "charts",
+      "profile": "library",
+      "note": "@strutvane/charts: KPI cards and chart widgets for admin screens."
     }
   ],
   "files": [
