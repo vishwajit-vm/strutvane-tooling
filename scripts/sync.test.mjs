@@ -57,7 +57,8 @@ describe('parseManifest', () => {
   test('accepts a valid manifest; string targets are library repos, files default to all profiles', () => {
     const m = parseManifest({ targets: ['core'], files: [{ path: 'a.json', when: 'always' }] })
     assert.deepEqual(m.targets, [{ name: 'core', dir: 'core', profile: 'library' }])
-    assert.deepEqual(m.files[0]?.profiles, ['library', 'site', 'meta'])
+    assert.deepEqual(m.files[0]?.profiles, ['library', 'site', 'meta', 'app-template'])
+    assert.equal(m.files[0]?.source, 'a.json', 'source defaults to the target path')
   })
   test('accepts object targets, including the hub at ".."', () => {
     const m = parseManifest({
@@ -139,6 +140,116 @@ describe('profiles', () => {
     assert.equal(status['site:.claude/ECOSYSTEM.md'], 'create')
     // The hub target resolves to the parent of rootDir (the temp dir itself), which exists.
     assert.equal(status['hub:.claude/ECOSYSTEM.md'], 'create')
+  })
+})
+
+describe('profile-specific variants (source)', () => {
+  /** A library and an app template; the app template gets its own tsconfig and CI. */
+  function variantFixture() {
+    const canonicalDir = join(dir, 'canonical')
+    const rootDir = join(dir, 'packages')
+    write(join(canonicalDir, 'tsconfig.base.json'), '{ "isolatedDeclarations": true }\n')
+    write(join(canonicalDir, 'app-template/tsconfig.base.json'), '{ "strict": true }\n')
+    write(join(canonicalDir, 'release.yml'), 'name: Release\n')
+    write(join(rootDir, 'lib/package.json'), '{}')
+    write(join(rootDir, 'app/package.json'), '{}')
+    const manifest = parseManifest({
+      targets: [
+        { name: 'lib', profile: 'library' },
+        { name: 'app', profile: 'app-template' },
+      ],
+      files: [
+        { path: 'tsconfig.base.json', when: 'hasPackageJson', profiles: ['library'] },
+        {
+          path: 'tsconfig.base.json',
+          source: 'app-template/tsconfig.base.json',
+          when: 'hasPackageJson',
+          profiles: ['app-template'],
+        },
+        { path: 'release.yml', when: 'hasPackageJson', profiles: ['library'] },
+      ],
+    })
+    return { canonicalDir, rootDir, manifest }
+  }
+
+  test('each profile gets its own source under the same target path', () => {
+    const f = variantFixture()
+    assert.equal(applySync(planSync(f)), 3)
+    assert.equal(
+      readFileSync(join(f.rootDir, 'lib/tsconfig.base.json'), 'utf8'),
+      '{ "isolatedDeclarations": true }\n',
+    )
+    assert.equal(
+      readFileSync(join(f.rootDir, 'app/tsconfig.base.json'), 'utf8'),
+      '{ "strict": true }\n',
+    )
+    assert.ok(!existsSync(join(f.rootDir, 'app/release.yml')), 'library-only file skipped')
+    assert.ok(!existsSync(join(f.rootDir, 'app/app-template')), 'the source folder is not copied')
+    // Idempotent: the variant is compared with its own source, not with the library file.
+    assert.deepEqual(
+      planSync(f)
+        .filter((a) => DRIFT.includes(a.status))
+        .map((a) => a.path),
+      [],
+    )
+  })
+
+  test('an edited variant copy is drift that sync restores from the variant source', () => {
+    const f = variantFixture()
+    applySync(planSync(f))
+    writeFileSync(join(f.rootDir, 'app/tsconfig.base.json'), '{ "isolatedDeclarations": true }\n')
+    const actions = planSync(f)
+    // The library entry is also planned for 'app' (as skipped-profile); look at the variant's.
+    const app = actions.find(
+      (a) => a.repo === 'app' && a.path === 'tsconfig.base.json' && a.status !== 'skipped-profile',
+    )
+    assert.equal(app?.status, 'update')
+    applySync(actions)
+    assert.equal(
+      readFileSync(join(f.rootDir, 'app/tsconfig.base.json'), 'utf8'),
+      '{ "strict": true }\n',
+    )
+  })
+
+  test('a missing variant source fails loudly and names the source', () => {
+    const f = variantFixture()
+    rmSync(join(f.canonicalDir, 'app-template/tsconfig.base.json'))
+    assert.throws(() => planSync(f), /canonical file missing: app-template\/tsconfig\.base\.json/)
+  })
+
+  test('source is validated like a path; one target path may not have two sources for a profile', () => {
+    const targets = ['core']
+    assert.throws(
+      () => parseManifest({ targets, files: [{ path: 'a', source: '../a', when: 'always' }] }),
+      /files\[0\]\.source must be a relative path/,
+    )
+    assert.throws(
+      () => parseManifest({ targets, files: [{ path: 'a', source: '/a', when: 'always' }] }),
+      /relative path/,
+    )
+    assert.throws(
+      () =>
+        parseManifest({
+          targets,
+          files: [
+            { path: 'a', when: 'always', profiles: ['library', 'meta'] },
+            { path: 'a', source: 'x/a', when: 'always', profiles: ['meta'] },
+          ],
+        }),
+      /"a" is listed twice for profile "meta"/,
+    )
+    // Omitting profiles means every profile, so it clashes with any variant.
+    assert.throws(
+      () =>
+        parseManifest({
+          targets,
+          files: [
+            { path: 'a', when: 'always' },
+            { path: 'a', source: 'x/a', when: 'always', profiles: ['app-template'] },
+          ],
+        }),
+      /listed twice for profile "app-template"/,
+    )
   })
 })
 
@@ -318,6 +429,48 @@ describe('sync.mjs CLI on the real manifest', () => {
     assert.ok(!existsSync(join(dir, 'packages/docs/.npmrc')))
     assert.ok(existsSync(join(dir, '.claude/ECOSYSTEM.md')))
     assert.ok(!existsSync(join(dir, '.github/workflows/ci.yml')))
+  })
+
+  test('the app template (skeleton) gets its own tsconfig and CI, and nothing release-related', () => {
+    for (const repo of ['skeleton', 'npx']) write(join(dir, 'packages', repo, 'package.json'), '{}')
+    const r = cli('--repo', 'skeleton', '--repo', 'npx')
+    assert.equal(r.status, 0, r.stderr)
+    const app = (path) => join(dir, 'packages/skeleton', path)
+    const lib = (path) => join(dir, 'packages/npx', path)
+    for (const path of [
+      '.npmrc',
+      'biome.base.json',
+      '.editorconfig',
+      '.gitattributes',
+      '.claude/ECOSYSTEM.md',
+      '.github/dependabot.yml',
+      '.github/scripts/check-deps.mjs',
+      '.github/scripts/check-code-rules.mjs',
+    ]) {
+      assert.equal(readFileSync(app(path), 'utf8'), readFileSync(lib(path), 'utf8'), path)
+    }
+    for (const path of [
+      '.github/workflows/release.yml',
+      '.github/scripts/publish-if-new.mjs',
+      '.github/scripts/check-package.mjs',
+      'RELEASE-READINESS.md',
+      'vitest.shared.ts',
+      'vitest.perf.config.ts',
+    ]) {
+      assert.ok(!existsSync(app(path)), `skeleton must not get ${path}`)
+      assert.ok(existsSync(lib(path)), `npx (library) gets ${path}`)
+    }
+    assert.match(readFileSync(lib('tsconfig.base.json'), 'utf8'), /"isolatedDeclarations": true/)
+    assert.doesNotMatch(readFileSync(app('tsconfig.base.json'), 'utf8'), /"isolatedDeclarations"/)
+    assert.match(readFileSync(lib('.github/workflows/ci.yml'), 'utf8'), /publint/)
+    // Comment lines explain what was left out, so only the YAML itself is checked.
+    const appCi = readFileSync(app('.github/workflows/ci.yml'), 'utf8')
+      .split('\n')
+      .filter((l) => !l.trimStart().startsWith('#'))
+      .join('\n')
+    assert.doesNotMatch(appCi, /publint|attw|package-check|workflow_call/)
+    assert.match(readFileSync(app('.gitignore'), 'utf8'), /^\/\.work\/$/m)
+    assert.equal(cli('--check', '--repo', 'skeleton', '--repo', 'npx').status, 0)
   })
 
   test('a leftover retired file fails --check until it is deleted by hand', () => {

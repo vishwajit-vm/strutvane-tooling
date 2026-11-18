@@ -10,7 +10,12 @@ import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-const DIRS = ['canonical/.github/workflows', '.github/workflows']
+const APP_CI = 'canonical/app-template/.github/workflows/ci.yml'
+const DIRS = [
+  'canonical/.github/workflows',
+  'canonical/app-template/.github/workflows',
+  '.github/workflows',
+]
 
 /** Every workflow file, as { rel, text, doc }. */
 const workflows = DIRS.flatMap((dir) =>
@@ -122,8 +127,8 @@ describe('every workflow', () => {
   })
 })
 
-describe('CI workflows (canonical and this repo)', () => {
-  for (const rel of ['canonical/.github/workflows/ci.yml', '.github/workflows/ci.yml']) {
+describe('CI workflows (canonical, app template and this repo)', () => {
+  for (const rel of ['canonical/.github/workflows/ci.yml', APP_CI, '.github/workflows/ci.yml']) {
     test(`${rel}: Linux, Windows and macOS × Node 24 and 26`, () => {
       const { matrix } = byPath(rel).doc.jobs.verify.strategy
       assert.deepEqual(matrix.os, ['ubuntu-latest', 'windows-latest', 'macos-latest'])
@@ -219,6 +224,46 @@ describe('canonical CI: the production-readiness gates (hub docs/19)', () => {
       assert.equal(job['continue-on-error'], undefined, name)
       for (const step of job.steps ?? []) assert.equal(step['continue-on-error'], undefined, name)
     }
+  })
+})
+
+describe('app-template CI: the library gates minus what only a published package needs', () => {
+  const library = byPath('canonical/.github/workflows/ci.yml')
+  const app = byPath(APP_CI)
+
+  test('verify and security are the library jobs, unchanged', () => {
+    assert.deepEqual(app.doc.jobs.verify, library.doc.jobs.verify)
+    assert.deepEqual(app.doc.jobs.security, library.doc.jobs.security)
+    assert.ok(
+      app.doc.jobs.verify.steps.some((s) => s.run === 'node .github/scripts/check-code-rules.mjs'),
+    )
+  })
+
+  test('repeat is the library job without the build step (an app template builds nothing)', () => {
+    const { steps: librarySteps, ...libraryJob } = library.doc.jobs.repeat
+    const { steps: appSteps, ...appJob } = app.doc.jobs.repeat
+    assert.deepEqual(appJob, libraryJob)
+    assert.deepEqual(
+      appSteps,
+      librarySteps.filter((s) => s.run !== 'npm run build'),
+    )
+    assert.ok(appSteps.length === librarySteps.length - 1, 'exactly the build step is gone')
+  })
+
+  test('no package-check, release hook or publishing tool; same triggers, env and concurrency', () => {
+    assert.deepEqual(Object.keys(app.doc.jobs).sort(), ['repeat', 'security', 'verify'])
+    assert.ok(!Object.hasOwn(app.doc.on, 'workflow_call'), 'nothing calls it')
+    // The header comment names what was left out; only the YAML itself must not use it.
+    const yaml = app.text
+      .split(/\r?\n/)
+      .filter((l) => !l.trimStart().startsWith('#'))
+      .join('\n')
+    assert.doesNotMatch(yaml, /publint|attw|npm pack|publish|check-package|workflow_call/)
+    const { workflow_call: _call, ...libraryOn } = library.doc.on
+    assert.deepEqual(app.doc.on, libraryOn)
+    assert.deepEqual(app.doc.env, library.doc.env)
+    assert.deepEqual(app.doc.concurrency, library.doc.concurrency)
+    assert.deepEqual(app.doc.permissions, { contents: 'read' })
   })
 })
 

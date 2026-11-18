@@ -1,0 +1,140 @@
+# Managed by strutvane-tooling (canonical/app-template/.github/workflows/ci.yml). Do not edit in
+# the app template repo: change it in strutvane-tooling and run `npm run sync` there.
+#
+# CI for the app-template profile (strutvane-skeleton): the application template that
+# `npm create strutvane` installs. It is never published, so this is the library CI
+# (canonical/.github/workflows/ci.yml) without what only a published package needs:
+#   verify    R1 + R2: the full gate (`npm run ci` = lint + typecheck + test) plus the code rules,
+#             on Linux, Windows and macOS × Node 24 and 26 (apps are developed on all three).
+#   repeat    R2: the test suite three times in a row; one red run means a flaky test.
+#   security  R3: `npm audit --omit=dev --audit-level=high` and a TruffleHog secrets scan.
+# Left out on purpose: the package-check job (tarball, publint, attw), the release workflow and
+# `workflow_call` (nothing calls this workflow). The shared jobs are kept identical to the library
+# CI; tooling's workflows.test.mjs fails if they drift apart.
+# Every job runs Node with --unhandled-rejections=strict (R2). npm only (hub docs/18 §7).
+# Actions are pinned to full commit SHAs (tag in the trailing comment; SHAs checked 2026-11-15);
+# Dependabot keeps them up to date.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  # Only pull requests cancel superseded runs; a run on main always finishes.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  NODE_OPTIONS: --unhandled-rejections=strict
+
+jobs:
+  verify:
+    name: verify (${{ matrix.os }}, node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [24, 26]
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node ${{ matrix.node }} (npm cache keyed on package-lock.json)
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      # The .npmrc guards (strict-allow-scripts, min-release-age, allow-git) need npm >= 11.19, and
+      # an older npm ignores them silently. Pin it so the gate never depends on the bundled npm.
+      - name: Use npm 11.19.0
+        run: npm install --global npm@11.19.0
+
+      - name: No local-only or non-registry dependencies
+        run: node .github/scripts/check-deps.mjs
+
+      - name: Code rules (no console in src/, every TODO/FIXME names an issue)
+        run: node .github/scripts/check-code-rules.mjs
+
+      - name: Install (exactly the lockfile; install scripts only from the allowlist)
+        run: npm ci
+
+      - name: Verify registry signatures and provenance of installed packages
+        run: npm audit signatures
+
+      - name: Quality gate (lint, typecheck, test, build)
+        run: npm run ci
+
+  repeat:
+    name: repeat (tests 3x, flaky-test check)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Use npm 11.19.0
+        run: npm install --global npm@11.19.0
+
+      - name: Install
+        run: npm ci
+
+      - name: Tests, three runs in a row (all must pass)
+        shell: bash
+        run: |
+          for run in 1 2 3; do
+            echo "::group::test run $run of 3"
+            npm test
+            echo "::endgroup::"
+          done
+
+  security:
+    name: security (audit, secrets)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out (full history, so the secrets scan sees every pushed commit)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Set up Node 24
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+
+      - name: Use npm 11.19.0
+        run: npm install --global npm@11.19.0
+
+      # Runtime dependencies only: dev tools never reach users. Reads package-lock.json; no install.
+      - name: No high or critical advisories in production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+      # TruffleHog OSS (AGPL-3.0, free; gitleaks-action needs a paid licence for organisations).
+      # The action pulls the scanner image by `version`, so the image is pinned by tag AND digest;
+      # pinning only the action SHA would still run whatever "latest" is. Verified and unknown
+      # findings fail the job; unverified pattern matches (test fixtures) are not reported.
+      - name: Secrets scan (commits in this push or pull request)
+        uses: trufflesecurity/trufflehog@3bd2b5887eb0efb8fa18bfd1d296032924e4ffdc # v3.99.9
+        with:
+          version: 3.99.9@sha256:2ec535840f860aa27f11fee20222fb790326ecd66325c96bd49d02ec6af46eca
+          extra_args: --results=verified,unknown

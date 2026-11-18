@@ -21,6 +21,10 @@
  *   - Never deletes files. Never touches files that are not listed in manifest.json.
  *   - A missing target repo folder (not cloned yet, or not created yet) is reported and skipped,
  *     never created, and never fails `--check`.
+ *   - A file can have a profile-specific variant: the manifest entry's `source` names the
+ *     canonical file to copy (default: the same path), so an app template gets a tsconfig and a
+ *     CI workflow of its own under the usual target path. Two entries with the same target path
+ *     never share a profile, so which file a repo gets is never ambiguous.
  *   - A file the manifest lists under `retired` (no longer canonical) that still exists in a repo
  *     is reported as drift, so `--check` fails until someone deletes it in that repo. Sync itself
  *     still never deletes it.
@@ -34,14 +38,20 @@ import { fileURLToPath } from 'node:url'
  * Repo profile. Each repo kind gets only the files that make sense for it:
  * - `library`: a TypeScript package repo (gets tsconfig/biome/vitest/CI/release),
  * - `site`: the docs site (Astro; has its own build config),
- * - `meta`: the hub/blueprint repo and the tooling repo itself.
- * @typedef {'library' | 'site' | 'meta'} Profile
+ * - `meta`: the hub/blueprint repo and the tooling repo itself,
+ * - `app-template`: an application template that is never published (strutvane-skeleton): the
+ *   npm guards, Biome, a tsconfig without `isolatedDeclarations` (an app emits no declarations)
+ *   and a CI workflow without the package-check job; no release workflow, no publint/attw, no
+ *   RELEASE-READINESS.md.
+ * @typedef {'library' | 'site' | 'meta' | 'app-template'} Profile
  */
 /**
  * A canonical file. `once: true` means create-once: sync writes it only when the repo has no copy,
  * and never compares or overwrites it afterwards, because the repo owns its content from then on
- * (e.g. RELEASE-READINESS.md, which each repo fills in).
- * @typedef {{ path: string, when: When, profiles: Profile[], once: boolean }} ManifestFile
+ * (e.g. RELEASE-READINESS.md, which each repo fills in). `path` is where the file goes in the
+ * repo; `source` is the file under `canonical/` it is copied from: the same path, unless the
+ * entry is a profile-specific variant (e.g. `app-template/tsconfig.base.json`).
+ * @typedef {{ path: string, source: string, when: When, profiles: Profile[], once: boolean }} ManifestFile
  */
 /** @typedef {{ path: string, reason: string, profiles: Profile[] }} RetiredFile */
 /** @typedef {{ name: string, dir: string, profile: Profile, note?: string }} Target */
@@ -53,7 +63,7 @@ import { fileURLToPath } from 'node:url'
 export const DRIFT = /** @type {readonly Status[]} */ (['create', 'update', 'retired'])
 
 /** @type {readonly Profile[]} */
-const PROFILES = ['library', 'site', 'meta']
+const PROFILES = ['library', 'site', 'meta', 'app-template']
 const NAME_PATTERN = /^[a-z0-9-]+$/
 
 const TOOLING_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -88,13 +98,23 @@ export function parseManifest(value) {
     if (file.when !== 'always' && file.when !== 'hasPackageJson') {
       throw new Error(`manifest: ${where}.when must be "always" or "hasPackageJson"`)
     }
+    const path = parsePath(file.path, `${where}.path`)
     return {
-      path: parsePath(file.path, where),
+      path,
+      source: file.source === undefined ? path : parsePath(file.source, `${where}.source`),
       when: /** @type {When} */ (file.when),
       profiles: parseProfiles(file.profiles, where),
       once: parseOnce(file.once, where),
     }
   })
+  // One target path, one source per profile: otherwise one entry would silently overwrite the
+  // other, and which file a repo gets would depend on the order of the list.
+  for (const [i, a] of files.entries()) {
+    for (const b of files.slice(i + 1)) {
+      const shared = a.path === b.path ? a.profiles.find((p) => b.profiles.includes(p)) : undefined
+      if (shared) throw new Error(`manifest: "${a.path}" is listed twice for profile "${shared}"`)
+    }
+  }
 
   const retiredList = m.retired === undefined ? [] : m.retired
   if (!Array.isArray(retiredList)) throw new Error('manifest: "retired" must be an array')
@@ -105,7 +125,7 @@ export function parseManifest(value) {
       throw new Error(`manifest: ${where}.reason must say why the file was retired`)
     }
     return {
-      path: parsePath(entry.path, where),
+      path: parsePath(entry.path, `${where}.path`),
       reason: entry.reason,
       profiles: parseProfiles(entry.profiles, where),
     }
@@ -129,7 +149,7 @@ function parseOnce(value, where) {
 }
 
 /**
- * A manifest path: relative, inside the repo, no traversal.
+ * A manifest path (a target path or a source): relative, inside the repo, no traversal.
  * @param {unknown} path
  * @param {string} where
  * @returns {string}
@@ -141,7 +161,7 @@ function parsePath(path, where) {
     path.includes('..') ||
     path.startsWith('/')
   ) {
-    throw new Error(`manifest: ${where}.path must be a relative path inside the repo`)
+    throw new Error(`manifest: ${where} must be a relative path inside the repo`)
   }
   return path
 }
@@ -233,8 +253,8 @@ export function planSync({ canonicalDir, rootDir, manifest, repos }) {
         actions.push({ repo, path: file.path, status: 'skipped-no-package-json', target })
         continue
       }
-      const source = join(canonicalDir, file.path)
-      if (!existsSync(source)) throw new Error(`canonical file missing: ${file.path}`)
+      const source = join(canonicalDir, file.source)
+      if (!existsSync(source)) throw new Error(`canonical file missing: ${file.source}`)
       const content = normalize(readFileSync(source, 'utf8'))
       if (!existsSync(target)) {
         actions.push({ repo, path: file.path, status: 'create', target, content })

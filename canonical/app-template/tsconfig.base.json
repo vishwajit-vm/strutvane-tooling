@@ -1,0 +1,48 @@
+{
+  // Managed by strutvane-tooling (canonical/app-template/tsconfig.base.json). Do not edit in the
+  // app template repo: change it in strutvane-tooling and run `npm run sync` there.
+  //
+  // The app-template profile's copy of canonical/tsconfig.base.json: every safety flag is the
+  // same (tooling's manifest.test.mjs fails if the two drift apart), minus the declaration
+  // settings. An app template is never published, so it emits no .d.ts files, and
+  // `isolatedDeclarations` would only force explicit return types on application code (route
+  // handlers, seeders, config files) for no benefit.
+  "$schema": "https://json.schemastore.org/tsconfig",
+  "compilerOptions": {
+    // Language & modules: modern Node (24+) ESM only.
+    "target": "ES2024",
+    "lib": ["ES2024"],
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "moduleDetection": "force",
+    "resolveJsonModule": true,
+
+    // Maximum type safety. Each flag removes a class of runtime bugs.
+    "strict": true,
+    "noUncheckedIndexedAccess": true, // arr[i] / obj[key] may be undefined: handle it
+    "exactOptionalPropertyTypes": true, // `x?: string` does not silently accept `undefined`
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noFallthroughCasesInSwitch": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "useUnknownInCatchVariables": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false,
+
+    // Every file can be compiled on its own (Node's type stripping, Vite and tsx all do that).
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true, // no enums/namespaces/parameter properties: plain, strippable TS
+    // Import siblings as './x.ts' (what Node's type stripping and bundlers expect). Allowed
+    // because type-checking never emits.
+    "allowImportingTsExtensions": true,
+    "sourceMap": true,
+
+    // Hygiene
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  }
+}
