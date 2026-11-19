@@ -7,6 +7,7 @@ import { delimiter, dirname, join, resolve } from 'node:path'
 import { after, describe, test } from 'node:test'
 import { fileURLToPath } from 'node:url'
 import {
+  comparePrecedence,
   compareStable,
   decide,
   declaresWorkspaces,
@@ -41,9 +42,9 @@ function makeTree(files) {
 }
 
 describe('distTagFor', () => {
-  test('stable versions go to latest, pre-releases to their id', () => {
+  test('stable and next versions go to latest (decision #131), other pre-releases to their id', () => {
     assert.equal(distTagFor('1.2.3'), 'latest')
-    assert.equal(distTagFor('0.1.0-next.0'), 'next')
+    assert.equal(distTagFor('0.1.0-next.0'), 'latest')
     assert.equal(distTagFor('0.1.0-canary.20261114'), 'canary')
     assert.equal(distTagFor('2.0.0-rc.1+build.5'), 'rc')
   })
@@ -52,6 +53,47 @@ describe('distTagFor', () => {
     assert.throws(() => distTagFor('v1.2.3'), /valid semver/)
     assert.throws(() => distTagFor('1.0.0-latest.1'), /pre-release id/)
     assert.throws(() => distTagFor('1.0.0-0.1'), /pre-release id/)
+  })
+})
+
+describe('comparePrecedence', () => {
+  test('orders pre-releases by semver precedence', () => {
+    assert.ok(comparePrecedence('0.2.0-next.2', '0.2.0-next.1') > 0)
+    assert.ok(comparePrecedence('0.2.0-next.10', '0.2.0-next.9') > 0)
+    assert.ok(comparePrecedence('0.2.0', '0.2.0-next.9') > 0)
+    assert.ok(comparePrecedence('0.2.0-next.0', '0.1.9') > 0)
+    assert.ok(comparePrecedence('0.2.0-next.1', '0.0.0-reserved.0') > 0)
+    assert.ok(comparePrecedence('1.0.0-alpha', '1.0.0-alpha.1') < 0)
+    assert.ok(comparePrecedence('1.0.0-alpha.1', '1.0.0-alpha.beta') < 0)
+    assert.equal(comparePrecedence('1.2.3+build.1', '1.2.3'), 0)
+    assert.throws(() => comparePrecedence('1.2', '1.2.3'), /valid semver/)
+  })
+})
+
+describe('decide moves latest only forwards', () => {
+  test('a next release becomes latest, never below the current latest', () => {
+    assert.deepEqual(
+      decide({ version: '0.2.0-next.2', published: ['0.2.0-next.1'], latest: '0.2.0-next.1' }),
+      {
+        action: 'stage',
+        tag: 'latest',
+      },
+    )
+    assert.deepEqual(
+      decide({ version: '0.2.0-next.0', published: [], latest: '0.0.0-reserved.0' }),
+      {
+        action: 'stage',
+        tag: 'latest',
+      },
+    )
+    assert.throws(
+      () => decide({ version: '0.2.0-next.1', published: [], latest: '0.2.0-next.2' }),
+      /a higher latest/,
+    )
+    assert.deepEqual(decide({ version: '0.3.0-canary.1', published: [], latest: '0.2.0-next.1' }), {
+      action: 'stage',
+      tag: 'canary',
+    })
   })
 })
 
@@ -70,14 +112,14 @@ describe('decide', () => {
       { action: 'skip', reason: '0.1.0-next.0 is already on npm' },
     )
   })
-  test('stages new pre-releases to their tag, even when only placeholders exist', () => {
+  test('stages a first next release to latest over the reserved placeholder (decision #131)', () => {
     assert.deepEqual(
       decide({
         version: '0.1.0-next.0',
         published: ['0.0.0-reserved.0'],
         latest: '0.0.0-reserved.0',
       }),
-      { action: 'stage', tag: 'next' },
+      { action: 'stage', tag: 'latest' },
     )
   })
   test('stages a first stable release to latest', () => {
@@ -105,7 +147,7 @@ describe('decide', () => {
         latest: undefined,
         staged: ['0.1.0-next.1'],
       }),
-      { action: 'stage', tag: 'next' },
+      { action: 'stage', tag: 'latest' },
     )
   })
   test('refuses to move latest backwards', () => {
